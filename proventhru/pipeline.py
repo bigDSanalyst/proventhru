@@ -17,7 +17,7 @@ from .search import best_first, FixedTactics
 
 
 def run(statements, out_dir, preamble=DEFAULT_PREAMBLE, policy=None, budget=200,
-        observers=(), log=print):
+        observers=(), log=print, backend=None):
     policy = policy or FixedTactics()
     os.makedirs(out_dir, exist_ok=True)
     corpus_path = os.path.join(out_dir, "corpus.jsonl")
@@ -25,7 +25,7 @@ def run(statements, out_dir, preamble=DEFAULT_PREAMBLE, policy=None, budget=200,
     summary = {}
     with open(corpus_path, "a") as corpus, open(traj_path, "a") as traj:
         for stmt in statements:
-            gate = classify(stmt, preamble)
+            gate = classify(stmt, preamble, backend=backend)
             entry = {"statement": stmt, "preamble": preamble, "gate": gate.record(),
                      "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             if gate.status == "refuted":
@@ -33,7 +33,7 @@ def run(statements, out_dir, preamble=DEFAULT_PREAMBLE, policy=None, budget=200,
             elif gate.status != "open":
                 entry["standing"] = "rejected"
             else:
-                with CoqEnv(stmt, preamble, observers=observers) as env:
+                with CoqEnv(stmt, preamble, observers=observers, backend=backend) as env:
                     res = best_first(env, policy, budget=budget)
                 rec = res.record()
                 traj.write(json.dumps(rec) + "\n")

@@ -1,7 +1,8 @@
 name: tests
 on: [push, pull_request]
 jobs:
-  test:
+  coqtop:
+    # Coq 8.18 from Ubuntu; the Petanque tests skip themselves here.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -10,3 +11,31 @@ jobs:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y coq
       - run: python -m unittest discover -s tests -v
+
+  petanque:
+    # Rocq 9.1 + coq-lsp (pet) from opam, and Pytanque; runs both backends.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.2"
+      - run: opam install -y rocq-core.9.1.1 rocq-stdlib coq-lsp.0.2.5+9.1
+      - run: sudo apt-get update && sudo apt-get install -y coq
+      - run: pip install -e '.[petanque]'
+      - name: Locate pet and rocq in the opam switch
+        run: |
+          BIN="$(opam var bin)"
+          echo "opam switch bin: $BIN"
+          ls "$BIN" | grep -E '^(pet|rocq|coq-lsp)' || { echo "pet/rocq missing from $BIN"; exit 1; }
+      - run: |
+          # Appended, so apt's coqtop/coqc stay first for the coqtop backend;
+          # pet and rocq (the Petanque backend and its kernel check) come from opam.
+          export PATH="$PATH:$(opam var bin)"
+          echo "coqtop: $(command -v coqtop)  pet: $(command -v pet)"
+          python -c "import importlib.util as u, shutil; assert shutil.which('pet'), 'pet not on PATH'; assert u.find_spec('pytanque'), 'pytanque not importable'"
+          python -m unittest discover -s tests -v
+          python tools/compare_backends.py examples/conjectures.txt --budget 60
