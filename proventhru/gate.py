@@ -15,9 +15,9 @@ be certified like any proof.
 """
 from dataclasses import dataclass
 
-from .coqtop import Coqtop, CoqTimeout
-from .env import DEFAULT_PREAMBLE, ProofSession
+from .env import DEFAULT_PREAMBLE
 from .kernel import certify
+from .session import CoqTimeout, TacticError, open_session
 
 TRIVIAL = ("reflexivity.", "intros; reflexivity.", "auto.", "intros; lia.",
            "intros; congruence.", "intuition.", "tauto.", "intros; discriminate.")
@@ -47,58 +47,45 @@ class GateResult:
 
 def _first_closing(session, tactics, timeout):
     for tac in tactics:
-        session.goto([])
         try:
-            text, err = session.apply(tac, timeout)
-        except CoqTimeout:
-            session.close()
-            session._start()
+            _, obs = session.run(session.root, tac, timeout)
+        except (TacticError, CoqTimeout):
             continue
-        if not err and "No more goals." in text:
+        if obs.finished:
             return tac
     return None
 
 
-def elaborates(statement, preamble=DEFAULT_PREAMBLE):
-    with Coqtop() as top:
-        if preamble.strip():
-            for sentence in _sentences(preamble):
-                text, _, err = top.run(sentence)
-                if err:
-                    return False, "preamble: " + text.strip()[-300:]
-        text, _, err = top.run(f"Check ({statement} : Prop).")
-        return (not err), text.strip()[-300:]
+def elaborates(statement, preamble=DEFAULT_PREAMBLE, backend=None):
+    s = open_session(preamble, "True", backend)
+    try:
+        s.query(s.root, f"Check ({statement} : Prop).")
+        return True, ""
+    except TacticError as e:
+        return False, str(e)
+    finally:
+        s.close()
 
 
-def _sentences(src):
-    out, cur = [], ""
-    for line in src.splitlines():
-        cur += " " + line.strip()
-        if cur.rstrip().endswith("."):
-            out.append(cur.strip())
-            cur = ""
-    if cur.strip():
-        out.append(cur.strip())
-    return out
-
-
-def classify(statement, preamble=DEFAULT_PREAMBLE, timeout=2, certify_disproof=True):
-    ok, detail = elaborates(statement, preamble)
+def classify(statement, preamble=DEFAULT_PREAMBLE, timeout=2, certify_disproof=True,
+             backend=None):
+    ok, detail = elaborates(statement, preamble, backend)
     if not ok:
         return GateResult("ill_formed", detail)
 
-    neg = ProofSession(preamble, f"~ ({statement})")
+    neg = open_session(preamble, f"~ ({statement})", backend)
     try:
         tac = _first_closing(neg, counterexample_tactics(), timeout)
+        compiler = neg.compiler
     finally:
         neg.close()
     if tac:
         kern = None
         if certify_disproof:
-            kern = certify(preamble, f"~ ({statement})", [tac]).ok
+            kern = certify(preamble, f"~ ({statement})", [tac], compiler=compiler).ok
         return GateResult("refuted", "negation proved by a small instance", (tac,), kern)
 
-    pos = ProofSession(preamble, statement)
+    pos = open_session(preamble, statement, backend)
     try:
         tac = _first_closing(pos, CONTRADICTION, timeout)
         if tac:

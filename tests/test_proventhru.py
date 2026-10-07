@@ -5,8 +5,10 @@ import unittest
 
 from proventhru import goals
 from proventhru.env import guard
+from proventhru.session import petanque_available
 
 HAVE_COQ = shutil.which("coqtop") and shutil.which("coqc")
+HAVE_PET = petanque_available()
 
 
 class TestGuard(unittest.TestCase):
@@ -45,11 +47,11 @@ class TestParse(unittest.TestCase):
         self.assertEqual(a.key, b.key)
 
 
-@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
-class TestEnv(unittest.TestCase):
+class TestEnv:
+    BACKEND = None
     def setUp(self):
         from proventhru.env import CoqEnv
-        self.env = CoqEnv("forall n : nat, n + 0 = n")
+        self.env = CoqEnv("forall n : nat, n + 0 = n", backend=self.BACKEND)
         self.root = self.env.reset()
 
     def tearDown(self):
@@ -88,13 +90,13 @@ class TestEnv(unittest.TestCase):
         self.assertIsNone(a.error)
 
 
-@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
-class TestKernel(unittest.TestCase):
+class TestKernel:
+    BACKEND = None
     def test_kernel_rejects_what_the_session_accepted(self):
         """A fixpoint that fails the guard condition closes every goal in the
         session, and proves n = S n. Only Qed catches it."""
         from proventhru.env import CoqEnv
-        with CoqEnv("forall n : nat, n = S n") as env:
+        with CoqEnv("forall n : nat, n = S n", backend=self.BACKEND) as env:
             a = env.step(env.reset(), "fix IH 1.").node
             st = env.step(a, "exact IH.")
         self.assertTrue(st.done)
@@ -103,12 +105,17 @@ class TestKernel(unittest.TestCase):
 
     def test_axiom_in_preamble_is_caught(self):
         from proventhru.kernel import certify
-        c = certify("Axiom cheat : forall P : Prop, P.", "1 = 2", ["apply cheat."])
+        from proventhru.session import open_session
+        s = open_session("", "True", self.BACKEND)
+        compiler = s.compiler
+        s.close()
+        c = certify("Axiom cheat : forall P : Prop, P.", "1 = 2", ["apply cheat."],
+                    compiler=compiler)
         self.assertFalse(c.ok)
 
 
-@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
-class TestGate(unittest.TestCase):
+class TestGate:
+    BACKEND = None
     def test_statuses(self):
         from proventhru.gate import classify
         cases = {"forall n, n + 1": "ill_formed",
@@ -118,25 +125,60 @@ class TestGate(unittest.TestCase):
                  "forall n m : nat, n + m = n": "refuted",
                  "forall l : list nat, rev (rev l) = l": "open"}
         for stmt, want in cases.items():
-            res = classify(stmt)
+            res = classify(stmt, backend=self.BACKEND)
             self.assertEqual(res.status, want, stmt)
             if want == "refuted":
                 self.assertTrue(res.kernel)
 
 
-@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
-class TestPipeline(unittest.TestCase):
+class TestPipeline:
+    BACKEND = None
     def test_corpus_lines(self):
         import json
         from proventhru.pipeline import run
         with tempfile.TemporaryDirectory() as out:
             summary = run(["forall n : nat, n * n >= n", "forall n m : nat, n + m = n",
-                           "forall n, n + 1"], out, budget=10, log=lambda *_: None)
+                           "forall n, n + 1"], out, budget=10, log=lambda *_: None,
+                          backend=self.BACKEND)
             self.assertEqual(summary, {"proved": 1, "refuted": 1, "rejected": 1})
             with open(os.path.join(out, "corpus.jsonl")) as fh:
                 rows = [json.loads(ln) for ln in fh]
             self.assertEqual(rows[0]["search"]["kernel"], True)
             self.assertTrue(os.path.getsize(os.path.join(out, "trajectories.jsonl")) > 0)
+
+
+def _per_backend(mixin, name, backend, available, why):
+    cls = type(name, (mixin, unittest.TestCase), {"BACKEND": backend})
+    globals()[name] = unittest.skipUnless(available, why)(cls)
+
+
+for _mixin in (TestEnv, TestKernel, TestGate, TestPipeline):
+    _per_backend(_mixin, _mixin.__name__ + "Coqtop", "coqtop", HAVE_COQ,
+                 "coqtop/coqc not in PATH")
+    _per_backend(_mixin, _mixin.__name__ + "Petanque", "petanque", HAVE_PET,
+                 "pet (coq-lsp) or pytanque not installed")
+
+
+@unittest.skipUnless(HAVE_PET, "pet (coq-lsp) or pytanque not installed")
+class TestPetanqueRecovery(unittest.TestCase):
+    def test_killed_process_replays_the_path(self):
+        """Handles outlive the pet process that made them: a stale one is
+        rebuilt by replaying its tactic path."""
+        from proventhru.env import CoqEnv
+        with CoqEnv("forall n : nat, n + 0 = n", backend="petanque") as env:
+            a = env.step(env.reset(), "intros n.").node
+            env.session.client.process.kill()
+            env.session._dead()
+            st = env.step(a, "induction n.")
+            self.assertIsNone(st.error)
+            self.assertEqual(len(st.node.obs.goals), 2)
+
+    def test_every_goal_has_its_hypotheses(self):
+        from proventhru.env import CoqEnv
+        with CoqEnv("forall n m : nat, n + m = m + n", backend="petanque") as env:
+            a = env.step(env.reset(), "intros n m.").node
+            b = env.step(a, "induction n.").node
+            self.assertEqual(b.obs.goals[1].hypotheses[-1], "IHn : n + m = m + n")
 
 
 if __name__ == "__main__":

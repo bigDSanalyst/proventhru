@@ -3,9 +3,10 @@
     obs   = env.reset()                    # root node: the statement's goal
     res   = env.step(node, "intros n.")    # one tactic, one Coq response
 
-A node is a tactic path from the root. Any node can be stepped from again,
-so search can branch and backtrack; ProofSession rewinds coqtop with BackTo
-to the longest shared prefix and replays the rest.
+A node is a tactic path from the root plus the backend's handle for it. Any
+node can be stepped from again, so search can branch and backtrack; how the
+backend gets back there (coqtop replays, Petanque keeps the state) does not
+show here. See session.py.
 
 Every step returns the raw signals (error, goals before and after, size
 before and after, revisit, finished, kernel) and a scalar reward made from
@@ -14,14 +15,12 @@ errors and for revisiting a state, and the terminal reward on kernel
 acceptance. Goal count is reported but weighted 0 by default, because
 induction and split raise it while making progress.
 """
-import os
 import re
-import tempfile
 from dataclasses import dataclass, field, asdict
 
 from . import goals as goalparse
-from .coqtop import Coqtop, CoqTimeout
 from .kernel import certify
+from .session import CoqTimeout, TacticError, open_session
 
 DEFAULT_PREAMBLE = "Require Import Arith Lia List."
 
@@ -63,6 +62,7 @@ class RewardWeights:
 class Node:
     path: tuple
     obs: goalparse.Observation
+    handle: object = field(default=None, repr=False, compare=False)
 
     @property
     def depth(self):
@@ -88,71 +88,11 @@ class Step:
                 "obs_key": None if self.node is None else self.node.obs.key}
 
 
-class ProofSession:
-    """A coqtop process in proof mode on one statement, positioned on a path."""
-
-    def __init__(self, preamble, statement, deadline=30.0):
-        self.preamble, self.statement, self.deadline = preamble, statement, deadline
-        self._start()
-
-    def _start(self):
-        self.top = Coqtop(deadline=self.deadline)
-        if self.preamble.strip():
-            fd, pre = tempfile.mkstemp(suffix=".v", prefix="proventhru-pre-")
-            with os.fdopen(fd, "w") as fh:
-                fh.write(self.preamble)
-            try:
-                text, _, err = self.top.run(f'Load "{pre}".')
-            finally:
-                os.unlink(pre)
-            if err:
-                raise ValueError("preamble does not load: " + text.strip()[-300:])
-        text, state, err = self.top.run(f"Goal {self.statement}.")
-        if err:
-            raise ValueError("statement does not elaborate: " + text.strip()[-300:])
-        self.root_text = text
-        self.path, self.states = [], [state]
-
-    def goto(self, path):
-        """Put the session at the end of path (which must have run before)."""
-        if not self.top.alive:
-            self._start()
-        k = 0
-        while k < min(len(path), len(self.path)) and path[k] == self.path[k]:
-            k += 1
-        if k < len(self.path):
-            _, _, err = self.top.run(f"BackTo {self.states[k]}.")
-            if err:
-                self.top.close()
-                self._start()
-                k = 0
-            del self.path[k:], self.states[k + 1:]
-        for tac in path[k:]:
-            text, err = self.apply(tac)
-            if err:
-                raise RuntimeError(f"replay of {tac!r} failed: {text.strip()[-200:]}")
-        return self
-
-    def apply(self, tactic, timeout=None):
-        sentence = tactic if timeout is None else f"Timeout {int(timeout)} {tactic}"
-        text, state, err = self.top.run(sentence)
-        if not err:
-            self.path.append(tactic)
-            self.states.append(state)
-            if not text.strip():
-                # coqtop prints nothing when a tactic leaves the goals as they
-                # were. Show is a query: the state recorded above stays valid.
-                text, _, _ = self.top.run("Show.")
-        return text, err
-
-    def close(self):
-        self.top.close()
-
-
 class CoqEnv:
     def __init__(self, statement, preamble=DEFAULT_PREAMBLE, tactic_timeout=5,
-                 deadline=30.0, weights=None, certify_on_finish=True, observers=()):
-        self.statement, self.preamble = statement, preamble
+                 deadline=30.0, weights=None, certify_on_finish=True, observers=(),
+                 backend=None):
+        self.statement, self.preamble, self.backend = statement, preamble, backend
         self.tactic_timeout, self.deadline = tactic_timeout, deadline
         self.weights = weights or RewardWeights()
         self.certify_on_finish = certify_on_finish
@@ -164,8 +104,9 @@ class CoqEnv:
     def reset(self):
         if self.session:
             self.session.close()
-        self.session = ProofSession(self.preamble, self.statement, self.deadline)
-        root = Node((), goalparse.parse(self.session.root_text))
+        self.session = open_session(self.preamble, self.statement, self.backend,
+                                    self.deadline)
+        root = Node((), self.session.root_obs, self.session.root)
         self.seen = {root.obs.key}
         return root
 
@@ -178,15 +119,12 @@ class CoqEnv:
             st.error = "refused: " + why
         else:
             try:
-                self.session.goto(list(node.path))
-                text, err = self.session.apply(tactic, self.tactic_timeout)
-                if err:
-                    st.error = text.strip().splitlines()[-1] if text.strip() else "error"
-                else:
-                    st.node = Node(node.path + (tactic,), goalparse.parse(text))
+                handle, obs = self.session.run(node.handle, tactic, self.tactic_timeout)
+                st.node = Node(node.path + (tactic,), obs, handle)
+            except TacticError as e:
+                st.error = str(e)
             except CoqTimeout:
                 st.error = "timeout"
-                self.session.close()
         st.signals = self._signals(before, st)
         st.reward = self._reward(st.signals)
         for fn in self.observers:
@@ -207,7 +145,8 @@ class CoqEnv:
         if after.finished:
             st.done = True
             if self.certify_on_finish:
-                st.certificate = certify(self.preamble, self.statement, st.node.path)
+                st.certificate = certify(self.preamble, self.statement, st.node.path,
+                                         compiler=self.session.compiler)
                 s["kernel"] = st.certificate.ok
         return s
 

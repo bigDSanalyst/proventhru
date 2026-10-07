@@ -5,3 +5,5 @@ out/
 *.vok
 *.vos
 *.glob
+.lia.cache
+.nia.cache

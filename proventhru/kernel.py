@@ -31,18 +31,22 @@ def certificate_source(preamble, statement, tactics, name="pt_goal"):
             f"{body}\nQed.\nPrint Assumptions {name}.\n")
 
 
-def certify(preamble, statement, tactics, name="pt_goal", timeout=300):
-    """Compile the proof with coqc. ok requires exit 0 and no axioms."""
-    coqc = shutil.which("coqc")
-    if coqc is None:
-        raise FileNotFoundError("coqc not in PATH")
+def certify(preamble, statement, tactics, name="pt_goal", timeout=300, compiler=None):
+    """Compile the proof from scratch. ok requires exit 0 and no axioms.
+    compiler is the argv prefix that compiles a .v file (the session's own,
+    so the proof is checked by the Rocq that found it); default coqc."""
+    if compiler is None:
+        coqc = shutil.which("coqc")
+        if coqc is None:
+            raise FileNotFoundError("coqc not in PATH")
+        compiler = [coqc]
     src = certificate_source(preamble, statement, tactics, name)
     with tempfile.TemporaryDirectory(prefix="proventhru-") as work:
         path = os.path.join(work, "Cert.v")
         with open(path, "w") as fh:
             fh.write(src)
         try:
-            proc = subprocess.run([coqc, path], capture_output=True, text=True,
+            proc = subprocess.run([*compiler, path], capture_output=True, text=True,
                                   timeout=timeout, cwd=work)
         except subprocess.TimeoutExpired:
             return Certificate(False, f"coqc timed out after {timeout}s", src)

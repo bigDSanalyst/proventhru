@@ -18,6 +18,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="proventhru")
     ap.add_argument("--preamble", default=DEFAULT_PREAMBLE,
                     help="Coq sentences loaded before every statement")
+    ap.add_argument("--backend", default=None, choices=["auto", "coqtop", "petanque"],
+                    help="default: $PROVENTHRU_BACKEND, else petanque if installed, else coqtop")
     sub = ap.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("gate", help="Position 1: classify a conjecture")
     g.add_argument("statement")
@@ -32,11 +34,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "gate":
-        res = classify(a.statement, a.preamble)
+        res = classify(a.statement, a.preamble, backend=a.backend)
         print(json.dumps(res.record(), indent=2))
         return 0 if res.status != "ill_formed" else 1
     if a.cmd == "prove":
-        with CoqEnv(a.statement, a.preamble) as env:
+        with CoqEnv(a.statement, a.preamble, backend=a.backend) as env:
             res = best_first(env, FixedTactics(), budget=a.budget)
         if a.trace:
             for s in res.steps:
@@ -48,7 +50,8 @@ def main(argv=None):
             print(res.certificate.detail)
         return 0 if res.proved else 1
     if a.cmd == "run":
-        summary = run(_statements(a.file), a.out, a.preamble, budget=a.budget)
+        summary = run(_statements(a.file), a.out, a.preamble, budget=a.budget,
+                      backend=a.backend)
         print(json.dumps(summary))
         return 0
 

@@ -4,12 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "proventhru"
-version = "0.1.0"
+version = "0.2.0"
 description = "Coq as the environment: conjecture gate, step-by-step proof search, kernel-certified corpus"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = []
+
+[project.optional-dependencies]
+# Not the unrelated "pytanque" on PyPI: LLM4Rocq's client for coq-lsp's Petanque.
+petanque = ["pytanque @ git+https://github.com/LLM4Rocq/pytanque@4092b1238b56468fdc1b3d100e078791c9690fd4"]
 
 [project.scripts]
 proventhru = "proventhru.cli:main"

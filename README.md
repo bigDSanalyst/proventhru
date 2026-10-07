@@ -19,16 +19,52 @@ conjectures ─▶ gate ─▶ open ─▶ best_first(CoqEnv, Policy) ─▶ ker
 ## Quick start
 
 ```sh
-sudo apt-get install coq          # Coq 8.18; coqtop and coqc must be on PATH
-pip install -e .
+sudo apt-get install coq          # coqtop backend: Coq 8.18, coqtop and coqc on PATH
+pip install -e .                  # add '.[petanque]' for the Petanque backend (below)
 proventhru gate  "forall n m : nat, n + m = n"      # refuted, disproof kernel-checked
 proventhru prove "forall n : nat, n * n >= n" --trace
 proventhru run examples/conjectures.txt --out out
-python -m unittest discover -s tests
+proventhru --backend petanque prove "forall n : nat, n * n >= n"
+python -m unittest discover -s tests          # runs per installed backend
 ```
 
-On `examples/conjectures.txt` the baseline gives: 2 proved, 1 refuted,
-4 rejected (2 trivial, 1 vacuous, 1 ill-formed) and 2 left open. The open ones
+## Backends
+
+`session.py` defines what a backend provides: `root`, `run(handle, tactic)`,
+`query(handle, command)` and `compiler`. A handle is opaque to the
+environment. Pick a backend with `--backend`, with `$PROVENTHRU_BACKEND`, or
+leave the default `auto`, which uses petanque when it is installed.
+
+| | coqtop | petanque |
+|---|---|---|
+| Prover | any Coq with `coqtop` (CI: 8.18) | Rocq 9.1 + coq-lsp's `pet` |
+| Handle | tactic path; rewinds with `BackTo` and replays | Petanque's own state; no replay |
+| Hypotheses | focused goal only | every goal |
+| Session start | 348 ms | 676 ms |
+| Step from the same node | 0.5 ms | 1.4 ms |
+| Step alternating between two depth-15 branches | 9.5 ms, grows with depth | 1.5 ms, flat |
+| Kernel check | `coqc` beside `coqtop` | `rocq compile` beside `pet` |
+
+Both backends pass the same 26 tests. On the 13 statements in
+`examples/conjectures.txt` they give identical gate verdicts and proof
+results (`tools/compare_backends.py` checks this and exits 1 on any
+disagreement). Search step counts differ slightly because Petanque's richer
+observations change the order of the frontier. End to end, Petanque is
+currently slower (30.6 s against 22.4 s), because the gate opens three
+sessions per conjecture and a Petanque session costs twice as much to start.
+Reusing one `pet` process across sessions is the next fix. Petanque's
+advantage is deep branching search, which the per-step numbers show.
+
+Installing the Petanque backend: with opam,
+`opam install rocq-core.9.1.1 rocq-stdlib coq-lsp.0.2.5+9.1` and then
+`pip install -e '.[petanque]'`. Without opam (opam's server was unreachable
+where this was built), `tools/install_rocq_from_source.sh` builds the same
+stack from apt and git. The PyPI package called `pytanque` is unrelated; the
+`[petanque]` extra pins LLM4Rocq's client by commit.
+
+On the 13 statements in `examples/conjectures.txt` the baseline gives:
+3 proved, 1 refuted, 7 rejected (5 trivial, 1 vacuous, 1 ill-formed) and
+2 left open. The open ones
 are `rev (rev l) = l` and the even/odd lemma; both need a lemma the
 fixed-tactic baseline never tries.
 
@@ -51,9 +87,10 @@ with CoqEnv("forall n : nat, n + 0 = n") as env:
   `Axiom`, `Require`, `BackTo`, `Qed`, bullets, and more than one sentence per
   action. Each tactic runs under Coq's `Timeout`, with a hard process deadline
   behind it.
-- **Transition**: `coqtop -emacs` state ids form a stack. `ProofSession`
-  turns them into a tree: it rewinds with `BackTo` to the longest shared
-  prefix and replays the rest. A killed session is rebuilt from the path.
+- **Transition**: `session.run(handle, tactic)`. Every handle the session has
+  returned can be run from again, so search branches and backtracks freely
+  (see Backends). A session killed at the hard deadline is rebuilt from the
+  handle's tactic path.
 - **Reward**: every step reports raw signals: `error`, `goals_before/after`,
   `size_before/after`, `revisit`, `finished` and `kernel`. `RewardWeights`
   turns them into a scalar. The defaults only shape the search: a step cost,
@@ -79,8 +116,8 @@ are only checked there.
   that is where a phase reader attaches. It is not implemented here.
 - **Training (DPO, then GRPO).** `trajectories.jsonl` holds every step, failed
   steps included, with signals and rewards.
-- **A Pétanque (coq-lsp) backend.** It would give real state handles instead of
-  replay. `ProofSession` is the only class that would change.
+- **One `pet` process shared across sessions**, so starting a Petanque
+  session costs one request instead of one process.
 
 ## Taken from pq-verify
 
