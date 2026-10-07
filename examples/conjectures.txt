@@ -1,0 +1,10 @@
+# One Coq statement per line. Preamble: Require Import Arith Lia List.
+forall n m : nat, n + m = m + n
+forall n : nat, n * n >= n
+forall n : nat, n < 0 -> n = 5
+forall n m : nat, n + m = n
+forall n : nat, n = n
+forall n : nat, Nat.even n = true \/ Nat.odd n = true
+forall l : list nat, rev (rev l) = l
+forall n : nat, 2 ^ n >= n + 1
+forall n, n + 1

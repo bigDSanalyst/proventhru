@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proventhru"
+version = "0.1.0"
+description = "Coq as the environment: conjecture gate, step-by-step proof search, kernel-certified corpus"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+proventhru = "proventhru.cli:main"
+
+[tool.setuptools]
+packages = ["proventhru"]
