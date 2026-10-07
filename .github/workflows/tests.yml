@@ -26,11 +26,16 @@ jobs:
       - run: opam install -y rocq-core.9.1.1 rocq-stdlib coq-lsp.0.2.5+9.1
       - run: sudo apt-get update && sudo apt-get install -y coq
       - run: pip install -e '.[petanque]'
+      - name: Locate pet and rocq in the opam switch
+        run: |
+          BIN="$(opam var bin)"
+          echo "opam switch bin: $BIN"
+          ls "$BIN" | grep -E '^(pet|rocq|coq-lsp)' || { echo "pet/rocq missing from $BIN"; exit 1; }
       - run: |
-          eval $(opam env)
-          # apt's coqtop/coqc stay first on PATH for the coqtop backend; pet
-          # and rocq come from opam for the Petanque backend.
-          export PATH="/usr/bin:$PATH"
-          python -c "from proventhru.session import petanque_available as p; assert p()"
+          # Appended, so apt's coqtop/coqc stay first for the coqtop backend;
+          # pet and rocq (the Petanque backend and its kernel check) come from opam.
+          export PATH="$PATH:$(opam var bin)"
+          echo "coqtop: $(command -v coqtop)  pet: $(command -v pet)"
+          python -c "import importlib.util as u, shutil; assert shutil.which('pet'), 'pet not on PATH'; assert u.find_spec('pytanque'), 'pytanque not importable'"
           python -m unittest discover -s tests -v
           python tools/compare_backends.py examples/conjectures.txt --budget 60
