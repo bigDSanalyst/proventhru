@@ -13,6 +13,7 @@ dependencies = []
 
 [project.optional-dependencies]
 # Not the unrelated "pytanque" on PyPI: LLM4Rocq's client for coq-lsp's Petanque.
+claude = ["anthropic>=1.12"]
 petanque = ["pytanque @ git+https://github.com/LLM4Rocq/pytanque@4092b1238b56468fdc1b3d100e078791c9690fd4"]
 
 [project.scripts]
