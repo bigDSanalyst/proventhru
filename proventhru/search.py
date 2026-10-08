@@ -19,12 +19,22 @@ from .env import CoqEnv
 
 
 class Policy:
+    """identity names the policy in every record it produces, so a bandit can
+    compare models and a trajectory says which model chose each step.
+    last_cost is the cost of the latest propose() call, or None for a policy
+    that calls no model: {"model", "input_tokens", "output_tokens", "model_ms"}."""
+
+    identity = {"id": "unknown", "model": None, "provider": None}
+    last_cost = None
+
     def propose(self, obs, path):
         """Return [(tactic, score)], higher score tried first."""
         raise NotImplementedError
 
 
 class FixedTactics(Policy):
+    identity = {"id": "fixed-tactics/v1", "model": None, "provider": None}
+
     CLOSERS = ["reflexivity.", "lia.", "auto.", "congruence.", "discriminate.",
                "assumption.", "trivial.", "nia."]
     SHAPERS = ["intros.", "simpl.", "split.", "constructor.", "f_equal."]
@@ -60,16 +70,18 @@ class SearchResult:
     def record(self):
         return {"statement": self.statement, "proved": self.proved,
                 "proof": list(self.proof),
-                "kernel": None if self.certificate is None else self.certificate.ok,
+                "kernel": None if self.certificate is None else self.certificate.verdict,
                 "kernel_detail": None if self.certificate is None else self.certificate.detail,
                 "expansions": self.expansions, "seconds": round(self.seconds, 2),
                 "steps": [s.record() for s in self.steps]}
 
 
-def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12):
+def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=None):
     """Expand nodes in order of (cumulative reward, policy score). A kernel
     rejection does not end the search: the trajectory records it and other
-    branches continue."""
+    branches continue. A kernel that did not check (not_checked) does not
+    count as proved either. With an episode (record.Episode), every policy
+    call and every step is written to the run record as it happens."""
     t0 = time.perf_counter()
     root = env.reset()
     tie = itertools.count()
@@ -81,13 +93,18 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12):
         if node.depth >= max_depth:
             continue
         expansions += 1
-        for tactic, score in policy.propose(node.obs, node.path):
+        candidates = policy.propose(node.obs, node.path)
+        prop = (episode.proposal(node.path, policy.identity, candidates, policy.last_cost)
+                if episode else None)
+        for tactic, score in candidates:
             st = env.step(node, tactic)
             steps.append(st)
+            if episode:
+                episode.step(st, proposal=prop)
             if st.node is None:
                 continue
             if st.done:
-                if st.signals.get("kernel") is not False:
+                if st.kernel in ("accepted", None):
                     return SearchResult(env.statement, True, st.node.path, st.certificate,
                                         steps, expansions, time.perf_counter() - t0)
                 continue

@@ -29,6 +29,91 @@ class TestGuard(unittest.TestCase):
             self.assertIsNone(guard(t), t)
 
 
+class TestRecord(unittest.TestCase):
+    """The run record without a prover: chain, checks, annotations."""
+    ENV = {"backend": "coqtop", "prover": "coq-8.18.0"}
+
+    def setUp(self):
+        from proventhru import record as rec
+        self.rec = rec
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "r.jsonl")
+        self.log = rec.RecordLog(self.path)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def _episode(self, standing="proved", kernel="accepted"):
+        ep = self.log.episode("1 = 1", "", self.ENV, policy={"id": "t"})
+        seq = ep.outcome(standing, ["reflexivity."], kernel=kernel)
+        return ep, seq
+
+    def test_chain_verifies_and_continues_across_opens(self):
+        self._episode()
+        log2 = self.rec.RecordLog(self.path)
+        ep = log2.episode("2 = 2", "", self.ENV)
+        ep.outcome("open")
+        entries = self.rec.load(self.path)
+        self.assertEqual(self.rec.verify(entries), [])
+        self.assertEqual([e["seq"] for e in entries], list(range(len(entries))))
+
+    def test_edit_deletion_and_reorder_are_caught(self):
+        self._episode()
+        self._episode()
+        lines = open(self.path).read().splitlines()
+        import json
+        e = json.loads(lines[1])
+        e["data"]["standing"] = "open"
+        edited = lines[:1] + [self.rec.canon(e)] + lines[2:]
+        cases = {"edited": edited, "dropped": lines[:1] + lines[2:],
+                 "reordered": [lines[1], lines[0]] + lines[2:]}
+        for name, ls in cases.items():
+            entries = [json.loads(x) for x in ls]
+            self.assertTrue(self.rec.verify(entries), name)
+
+    def test_refuses_to_append_to_a_broken_record(self):
+        self._episode()
+        with open(self.path, "a") as fh:
+            fh.write('{"format": "proventhru-record/v1", "seq": 99}\n')
+        with self.assertRaises(self.rec.RecordError):
+            self.rec.RecordLog(self.path)
+
+    def test_malformed_entries_are_refused_at_write(self):
+        R = self.rec
+        with self.assertRaises(R.RecordError):      # proved without the kernel
+            self._episode(standing="proved", kernel="not_checked")
+        with self.assertRaises(R.RecordError):      # a step for no episode
+            self.log.append("step", {"episode": "nope", "path": [], "tactic": "x.",
+                                     "session": {"outcome": "ok"}, "phase": R.no_phase()})
+        with self.assertRaises(R.RecordError):      # environment without a prover
+            self.log.episode("1 = 1", "", {"backend": "coqtop"})
+        ep = self.log.episode("1 = 1", "", self.ENV)
+        with self.assertRaises(R.RecordError):      # session outcome must be known
+            self.log.append("step", {"episode": ep.id, "path": [], "tactic": "x.",
+                                     "session": {"outcome": "maybe"}, "phase": R.no_phase()})
+        ep.outcome("open")
+        with self.assertRaises(R.RecordError):      # nothing after an outcome
+            self.log.append("proposal", {"episode": ep.id, "path": [], "policy": None,
+                                         "candidates": [], "cost": None})
+
+    def test_annotation_withdraws_without_rewriting(self):
+        ep, seq = self._episode()
+        before = open(self.path).read()
+        self.log.annotate(seq, "unsound", "kernel bug in this version", by="test")
+        after = open(self.path).read()
+        self.assertTrue(after.startswith(before))           # appended, nothing rewritten
+        row = self.rec.corpus(self.rec.load(self.path))[0]
+        self.assertEqual(row["standing"], "withdrawn")
+        self.assertEqual(row["annotations"][0]["label"], "unsound")
+        self.assertEqual(self.rec.verify(self.rec.load(self.path)), [])
+
+    def test_annotation_must_name_an_existing_entry_by_hash(self):
+        self._episode()
+        with self.assertRaises(self.rec.RecordError):
+            self.log.append("annotation", {"target": {"seq": 0, "hash": "0" * 64},
+                                           "label": "note", "reason": "x"})
+
+
 class TestStatement(unittest.TestCase):
     def test_sentence_breaks_are_refused(self):
         from proventhru.session import check_statement
@@ -86,7 +171,7 @@ class TestEnv:
         a = self.env.step(self.root, "intros n.").node
         st = self.env.step(a, "induction n; simpl; auto.")
         self.assertTrue(st.done)
-        self.assertTrue(st.signals["kernel"])
+        self.assertEqual(st.kernel, "accepted")
         self.assertGreater(st.reward, 0.9)
 
     def test_revisit_penalised(self):
@@ -95,7 +180,8 @@ class TestEnv:
 
     def test_timeout_recovers(self):
         st = self.env.step(self.root, "repeat (assert True by trivial).")
-        self.assertIsNotNone(st.error)
+        self.assertEqual(st.outcome, "timeout")
+        self.assertEqual(st.reward, self.env.weights.step)   # not punished as an error
         a = self.env.step(self.root, "intros n.")
         self.assertIsNone(a.error)
 
@@ -110,7 +196,8 @@ class TestKernel:
             a = env.step(env.reset(), "fix IH 1.").node
             st = env.step(a, "exact IH.")
         self.assertTrue(st.done)
-        self.assertFalse(st.signals["kernel"])
+        self.assertEqual(st.outcome, "ok")          # the session's verdict...
+        self.assertEqual(st.kernel, "rejected")     # ...and the kernel's, apart
         self.assertLess(st.reward, 0)
 
     def test_axiom_in_preamble_is_caught(self):
@@ -139,23 +226,50 @@ class TestGate:
             res = classify(stmt, backend=self.BACKEND)
             self.assertEqual(res.status, want, stmt)
             if want == "refuted":
-                self.assertTrue(res.kernel)
+                self.assertEqual(res.kernel, "accepted")
 
 
 class TestPipeline:
     BACKEND = None
-    def test_corpus_lines(self):
-        import json
-        from proventhru.pipeline import run
+
+    def test_record_holds_and_corpus_is_a_view(self):
+        from proventhru import record as rec
+        from proventhru.pipeline import run, RECORD
         with tempfile.TemporaryDirectory() as out:
             summary = run(["forall n : nat, n * n >= n", "forall n m : nat, n + m = n",
                            "forall n, n + 1"], out, budget=10, log=lambda *_: None,
                           backend=self.BACKEND)
             self.assertEqual(summary, {"proved": 1, "refuted": 1, "rejected": 1})
-            with open(os.path.join(out, "corpus.jsonl")) as fh:
-                rows = [json.loads(ln) for ln in fh]
-            self.assertEqual(rows[0]["search"]["kernel"], True)
-            self.assertTrue(os.path.getsize(os.path.join(out, "trajectories.jsonl")) > 0)
+            entries = rec.load(os.path.join(out, RECORD))
+            self.assertEqual(rec.verify(entries), [])
+            rows = {r["statement"]: r for r in rec.corpus(entries)}
+            self.assertEqual(rows["forall n : nat, n * n >= n"]["kernel"], "accepted")
+            self.assertEqual(rows["forall n m : nat, n + m = n"]["standing"], "refuted")
+            env = entries[0]["data"]["environment"]
+            self.assertEqual(env["backend"], self.BACKEND)
+            self.assertRegex(env["prover"], r"^(coq|rocq)-\d")
+
+    def test_recorded_step_replays_from_the_statement(self):
+        """Every step carries its full path: replaying it in a fresh session
+        reaches the observation the record holds."""
+        from proventhru import record as rec
+        from proventhru.env import CoqEnv
+        from proventhru.pipeline import run, RECORD
+        with tempfile.TemporaryDirectory() as out:
+            run(["forall n : nat, n * n >= n"], out, budget=6,
+                log=lambda *_: None, backend=self.BACKEND)
+            entries = rec.load(os.path.join(out, RECORD))
+            ep = entries[0]["data"]
+            ok = [s for s in rec.steps(entries) if s["session"]["outcome"] == "ok"
+                  and not s["session"]["finished"]]
+            self.assertTrue(ok)
+            target = max(ok, key=lambda s: len(s["path"]))
+            with CoqEnv(ep["statement"], ep["preamble"], backend=self.BACKEND,
+                        certify_on_finish=False) as env:
+                node = env.reset()
+                for tac in target["path"] + [target["tactic"]]:
+                    node = env.step(node, tac).node
+                self.assertEqual(node.obs.key, target["session"]["observation"]["key"])
 
 
 def _per_backend(mixin, name, backend, available, why):

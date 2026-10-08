@@ -8,14 +8,25 @@ node can be stepped from again, so search can branch and backtrack; how the
 backend gets back there (coqtop replays, Petanque keeps the state) does not
 show here. See session.py.
 
-Every step returns the raw signals (error, goals before and after, size
-before and after, revisit, finished, kernel) and a scalar reward made from
-them by RewardWeights. The defaults only shape: a step cost, a penalty for
-errors and for revisiting a state, and the terminal reward on kernel
-acceptance. Goal count is reported but weighted 0 by default, because
-induction and split raise it while making progress.
+Every step returns two verdicts that are kept apart, because they train
+different things and disagree in exactly the case worth catching (a `fix`
+that closes every goal in the session and fails the guard condition at Qed):
+
+  outcome  what the live session said about this one step:
+           ok | error (Coq refused the tactic) | refused (the guard refused it,
+           Coq never saw it) | timeout (nothing was decided)
+  kernel   only on a step that finished the proof: what a from-scratch compile
+           said about the whole proof: accepted | rejected | not_checked
+
+plus the raw signals (goals and size before and after, revisit, finished) and
+a scalar reward made from them by RewardWeights. The defaults only shape: a
+step cost, a penalty for errors and for revisiting a state, and the terminal
+reward on kernel acceptance. A timeout is not a failure and is weighted 0 by
+default; so is a kernel that did not check. Goal count is reported but
+weighted 0, because induction and split raise it while making progress.
 """
 import re
+import time
 from dataclasses import dataclass, field, asdict
 
 from . import goals as goalparse
@@ -53,9 +64,12 @@ class RewardWeights:
     step: float = -0.01
     error: float = -0.1
     revisit: float = -0.2
+    refused: float = -0.1         # the guard refused the action
+    timeout: float = 0.0          # nothing was decided: not a failure
     goals_delta: float = 0.0      # per goal removed (before - after)
     size_delta: float = 0.0       # per 100 characters of conclusion removed
-    kernel: float = 1.0           # terminal: proof certified
+    kernel: float = 1.0           # terminal: proof certified (accepted)
+    kernel_rejected: float = 0.0  # the session finished, the kernel refused
 
 
 @dataclass
@@ -79,10 +93,20 @@ class Step:
     reward: float = 0.0
     done: bool = False
     certificate: object = None
+    outcome: str = "ok"          # ok | error | refused | timeout
+    prover_ms: float = 0.0       # time in the session for this step
+    kernel_ms: float = 0.0       # time in the from-scratch compile, if any
+
+    @property
+    def kernel(self):
+        """accepted | rejected | not_checked, or None when the step did not
+        finish the proof (or certification is off)."""
+        return None if self.certificate is None else self.certificate.verdict
 
     def record(self):
         return {"tactic": self.tactic, "depth": len(self.parent),
-                "error": self.error, "signals": self.signals, "reward": self.reward,
+                "outcome": self.outcome, "error": self.error,
+                "kernel": self.kernel, "signals": self.signals, "reward": self.reward,
                 "done": self.done,
                 "obs": None if self.node is None else self.node.obs.text(),
                 "obs_key": None if self.node is None else self.node.obs.key}
@@ -116,23 +140,28 @@ class CoqEnv:
         before = node.obs
         why = guard(tactic)
         if why:
-            st.error = "refused: " + why
+            st.error, st.outcome = "refused: " + why, "refused"
         else:
+            t0 = time.perf_counter()
             try:
                 handle, obs = self.session.run(node.handle, tactic, self.tactic_timeout)
                 st.node = Node(node.path + (tactic,), obs, handle)
             except TacticError as e:
                 st.error = str(e)
+                # Rocq's own Timeout reports as an error message; it decided nothing.
+                # coqtop says "Error: Timeout!", Petanque "Timeout!".
+                st.outcome = "timeout" if re.search(r"(^|: )Timeout!?\s*$", st.error) else "error"
             except CoqTimeout:
-                st.error = "timeout"
+                st.error, st.outcome = "timeout", "timeout"
+            st.prover_ms = (time.perf_counter() - t0) * 1000
         st.signals = self._signals(before, st)
-        st.reward = self._reward(st.signals)
+        st.reward = self._reward(st, st.signals)
         for fn in self.observers:
             fn(st)
         return st
 
     def _signals(self, before, st):
-        s = {"error": st.error is not None,
+        s = {"error": st.outcome == "error",
              "goals_before": len(before.goals) + before.shelved,
              "size_before": before.size, "revisit": False, "finished": False,
              "kernel": None}
@@ -145,22 +174,26 @@ class CoqEnv:
         if after.finished:
             st.done = True
             if self.certify_on_finish:
+                t0 = time.perf_counter()
                 st.certificate = certify(self.preamble, self.statement, st.node.path,
                                          compiler=self.session.compiler)
-                s["kernel"] = st.certificate.ok
+                st.kernel_ms = (time.perf_counter() - t0) * 1000
+                s["kernel"] = st.certificate.verdict
         return s
 
-    def _reward(self, s):
+    def _reward(self, st, s):
         w = self.weights
         r = w.step
-        if s["error"]:
-            return r + w.error
+        if st.outcome != "ok":
+            return r + {"error": w.error, "refused": w.refused, "timeout": w.timeout}[st.outcome]
         if s["revisit"]:
             r += w.revisit
         r += w.goals_delta * (s["goals_before"] - s.get("goals_after", s["goals_before"]))
         r += w.size_delta * (s["size_before"] - s.get("size_after", s["size_before"])) / 100
-        if s["kernel"]:
+        if s["kernel"] == "accepted":
             r += w.kernel
+        elif s["kernel"] == "rejected":
+            r += w.kernel_rejected
         return r
 
     def close(self):

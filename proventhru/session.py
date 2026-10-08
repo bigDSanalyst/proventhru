@@ -7,6 +7,8 @@ A session is proof mode on one statement:
     h, obs = s.run(s.root, "intros n.", timeout=5)
     s.query(h, "Check Nat.add_comm.")      # output text; the proof does not move
     s.compiler                             # argv prefix that compiles a .v file
+    s.environment                          # {backend, prover, ...}: what every
+                                           # verdict is relative to
     s.close()
 
 Handles are opaque. Any handle the session returned can be run from again,
@@ -20,6 +22,43 @@ import importlib.util
 import os
 import re
 import shutil
+
+
+_IDENTITY = {}
+_VERSION = {}
+
+
+def prover_identity(exe):
+    """'coq-8.18.0' or 'rocq-9.1.1' for the binary at exe, from its own
+    --version, or 'unknown' when it does not say. A verdict is only meaningful
+    relative to the prover that gave it, so every record names this."""
+    if exe in _IDENTITY:
+        return _IDENTITY[exe]
+    import subprocess
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                             timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    m = re.search(r"The (Coq Proof Assistant|Rocq Prover), version (\S+)", out)
+    ident = (("rocq" if m.group(1).startswith("Rocq") else "coq") + "-" + m.group(2)
+             if m else "unknown")
+    _IDENTITY[exe] = ident
+    return ident
+
+
+def tool_version(exe):
+    """First line of `exe --version` (coq-lsp's pet prints just '0.2.5')."""
+    if exe in _VERSION:
+        return _VERSION[exe]
+    import subprocess
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                             timeout=30).stdout.strip().splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        out = []
+    _VERSION[exe] = out[0] if out else "unknown"
+    return _VERSION[exe]
 
 
 class CoqNotFound(RuntimeError):

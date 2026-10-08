@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from .goals import Goal, Observation
 from .pool import default_pool
-from .session import CoqNotFound, TacticError
+from .session import CoqNotFound, TacticError, prover_identity, tool_version
 
 @dataclass(frozen=True)
 class Handle:
@@ -68,6 +68,11 @@ class PetanqueSession:
         bindir = os.path.dirname(shutil.which("pet"))
         rocq = os.path.join(bindir, "rocq")
         self.compiler = [rocq, "compile"] if os.path.exists(rocq) else ["coqc"]
+        pet = shutil.which("pet")
+        self.environment = {"backend": self.name,
+                            "prover": prover_identity(rocq if os.path.exists(rocq) else "coqc"),
+                            "interface": f"coq-lsp pet {tool_version(pet)} ({pet})",
+                            "compiler": " ".join(self.compiler)}
         self.worker = (pool or default_pool()).acquire()
         self._root()
 
