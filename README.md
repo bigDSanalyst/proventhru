@@ -267,6 +267,13 @@ sha256 and commit.
   invalid (the answer or a candidate was unusable), unproductive (a valid
   tactic that failed, timed out or looped). Only the last is about reasoning.
 
+- **Parallel statements**: `--jobs N` attempts N statements at once, each
+  with its own policy instance and Coq session, so a vLLM server batches
+  their calls. Outcomes don't depend on N.
+- **M1 in Colab**: `notebooks/m1_colab.ipynb` installs Coq 8.18.0 with opam
+  (cached on Drive), pins the model revision, serves it with vLLM in fp16,
+  and runs the dev set. Held-out runs stay refused until the freeze.
+
 ```sh
 proventhru protocol check PROTOCOL.md
 proventhru run examples/eval_test.txt --out out/A600 --budget 0 --step-budget 600 \

@@ -36,7 +36,8 @@ def _policy(a, preamble):
         pol = OpenAICompatPolicy(preamble, model=a.model, base_url=a.base_url,
                                  key_env=a.key_env or None, k=a.k, temperature=a.temperature,
                                  seed=a.seed, response_format=a.response_format,
-                                 cache=a.cache, max_calls=a.max_calls)
+                                 cache=a.cache, max_calls=a.max_calls,
+                                 provider=a.provider)
     else:
         from .policy_claude import ClaudePolicy
         pol = ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
@@ -78,6 +79,9 @@ def _policy_args(p):
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cache", default=None, help="openai: response cache file (JSONL)")
+    p.add_argument("--provider", default=None,
+                   help="openai: what serves the model, recorded in the identity "
+                        "(e.g. 'vllm 0.6.6.post1, fp16, T4'); default: the base URL")
     p.add_argument("--protocol", default=None,
                    help="the committed PROTOCOL.md the run is checked against and cites")
     p.add_argument("--step-budget", type=int, default=None,
@@ -109,6 +113,8 @@ def main(argv=None):
     r.add_argument("file")
     r.add_argument("--out", default="out")
     r.add_argument("--budget", type=int, default=200, help="cap on expansions (0: none)")
+    r.add_argument("--jobs", type=int, default=1,
+                   help="statements attempted at once, each with its own policy and Coq session")
     _policy_args(r)
     rp = sub.add_parser("report", help="compare runs from their records")
     rp.add_argument("records", nargs="+")
@@ -191,7 +197,8 @@ def main(argv=None):
         try:
             summary = run(stmts, a.out, preamble, policy=pol, budget=_budget(a.budget),
                           backend=a.backend, step_budget=a.step_budget,
-                          protocol=_protocol(a, pol))
+                          protocol=_protocol(a, pol), jobs=a.jobs,
+                          policy_factory=lambda: _policy(a, preamble))
         except ProtocolError as e:
             raise SystemExit(f"protocol: {e}")
         except PolicyUnavailable as e:

@@ -128,6 +128,19 @@ class ResponseCache:
             self.data[key] = e
 
 
+_CACHES, _CACHES_LOCK = {}, threading.Lock()
+
+
+def shared_cache(path):
+    """One ResponseCache per file in this process, so policies on parallel
+    workers share its lock and what it holds."""
+    key = os.path.abspath(path)
+    with _CACHES_LOCK:
+        if key not in _CACHES:
+            _CACHES[key] = ResponseCache(key)
+        return _CACHES[key]
+
+
 RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 KEEP_HEADERS = re.compile(r"^(x-inference|x-request-id|x-compute|x-ratelimit|openrouter|retry-after)",
                           re.I)
@@ -164,7 +177,7 @@ class OpenAICompatPolicy(Policy):
         self.key_env, self.k = key_env, k
         self.temperature, self.seed, self.max_tokens = temperature, seed, max_tokens
         self.response_format = response_format
-        self.cache = ResponseCache(cache) if isinstance(cache, str) else cache
+        self.cache = shared_cache(cache) if isinstance(cache, str) else cache
         self.transport = transport or HTTPTransport()
         self.retries, self.backoff, self.max_backoff = retries, backoff, max_backoff
         self.timeout, self.max_calls, self.calls, self.sleep = timeout, max_calls, 0, sleep

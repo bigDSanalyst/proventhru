@@ -37,3 +37,17 @@ step budgets exist to remove, and it is why steps are the primary axis.
 
 **What the model conditions are compared against** (primary, 600 steps):
 C against A's 22, and D against B's 22.
+
+## The records
+
+Kept outside git, as xz files, in the project's Drive folder
+(`proventhru/records/v1/`). `xz -d`, then `proventhru verify`, must
+report the head in the table above.
+
+```
+2d3805fb546ffa96bbc7b0c4b4717342a5785be8b56d5edab40af42d84a95abe  A2000.records.jsonl.xz
+c919faf864d888542488b7716924f5323d4ab2246496fabec195554490b0c706  A600.records.jsonl.xz
+8e92da47b26be3dcc35c89d284035caf14031afd4f3ae483390aeb669acd7e01  A600r.records.jsonl.xz
+6962aec29a4bb54d5e117dda1ecb0506e39729958a2e94ed7a9ea39b5a9fde5a  B2000.records.jsonl.xz
+00d3bd1d22a2146ec5af2e5e49e158ca56d6dab38e3bb6a0c2b751abe5f65052  B600.records.jsonl.xz
+```

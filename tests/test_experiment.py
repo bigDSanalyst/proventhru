@@ -131,7 +131,9 @@ class TestOpenAICompat(unittest.TestCase):
             p, t = policy([ok('{"candidates": [{"tactic": "lia", "argument": ""}]}')], cache=path)
             first = p.propose(obs(), [])
             self.assertEqual(p.last_cost["cache"], "miss")
-            again, t2 = policy([], cache=path)        # a new process: the cache is on disk
+            from proventhru import policy_openai as po
+            po._CACHES.clear()                        # as if a new process: from disk
+            again, t2 = policy([], cache=path)
             self.assertEqual(again.propose(obs(), []), first)
             self.assertEqual(again.last_cost["cache"], "hit")
             self.assertEqual(t2.requests, [])
@@ -388,6 +390,45 @@ class TestEvalGenerator(unittest.TestCase):
                     x = __import__("re").sub(rf"\b{old}\b", new, x)
                 self.assertEqual(x, y)
             self.assertTrue(all("list nat" in ln for ln in la))
+
+
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestParallelStatements(unittest.TestCase):
+    STMTS = ["forall n : nat, n * n >= n", "forall n m : nat, n + m = n",
+             "forall n : nat, n * (n + 1) >= n", "forall l : list nat, rev (rev l) = l",
+             "forall n : nat, 2 * n = n + n"]
+
+    def test_jobs_do_not_change_outcomes_and_policies_are_per_worker(self):
+        from proventhru import record as rec
+        from proventhru.pipeline import run, RECORD
+        from proventhru.search import FixedTactics
+        built = []
+
+        def factory():
+            built.append(FixedTactics())
+            return built[-1]
+
+        rows = {}
+        for jobs in (1, 3):
+            with tempfile.TemporaryDirectory() as out:
+                run(self.STMTS, out, PRE + " Require Import List.", budget=None,
+                    step_budget=80, log=lambda *_: None, backend="coqtop", jobs=jobs,
+                    policy_factory=factory)
+                entries = rec.load(os.path.join(out, RECORD))
+                self.assertEqual(rec.verify(entries), [])
+                rows[jobs] = {r["item"]: (r["standing"], tuple(r["proof"]))
+                              for r in rec.corpus(entries)}
+        self.assertEqual(rows[1], rows[3])
+        self.assertGreaterEqual(len(built), 2)        # more than one worker policy
+
+    def test_a_shared_cache_file_has_one_instance(self):
+        from proventhru import policy_openai as po
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.jsonl")
+            a, _ = policy([], cache=path)
+            b, _ = policy([], cache=path)
+            self.assertIs(a.cache, b.cache)
+            po._CACHES.clear()
 
 
 if __name__ == "__main__":
