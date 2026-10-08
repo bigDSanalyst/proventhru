@@ -152,6 +152,7 @@ class RetrievalPolicy(Policy):
             lemmas = self.retriever.lemmas(self.env.session,
                                            terms(g.conclusion, g.hypotheses))[: self.top]
         have = {t for t, _ in out}
+        added = []
         for i, (name, stmt) in enumerate(lemmas):
             s = self.score - 0.01 * i
             forms = ([f"rewrite {name}.", f"rewrite <- {name}."] if " = " in stmt else [])
@@ -160,17 +161,31 @@ class RetrievalPolicy(Policy):
                 if t not in have:
                     have.add(t)
                     out.append((t, s))
+                    added.append(t)
         cost = dict(self.base.last_cost or {})
+        # added: the candidates retrieval contributed, so a report can tell the
+        # base policy's choices (a model's) from the lemmas appended to them.
         cost.update(retrieval_ms=round(self.retriever.ms - ms0, 1),
-                    lemmas=[n for n, _ in lemmas])
+                    lemmas=[n for n, _ in lemmas], added=added)
         self.last_cost = cost
         return out
 
 
-def library_closers(session, conclusion, hypotheses=(), top=8):
+def library_closers(session, conclusion, hypotheses=(), top=8, per_term=4):
     """Candidates that close a goal with one library lemma: what the gate tries
     before calling a statement open. `intros; apply L` covers a lemma that
-    quantifies in another order (firstn_skipn is stated forall n l)."""
-    lemmas = Retriever().lemmas(session, terms(conclusion, hypotheses))[:top]
-    return [f"{form} {name}." for name, _ in lemmas
+    quantifies in another order (firstn_skipn is stated forall n l).
+
+    The lemmas are the best `top` that mention all the goal's terms, then the
+    best `per_term` for each term alone: an instance of a library lemma
+    (rev (rev (filter f l)) = filter f l is rev_involutive) mentions terms the
+    lemma does not, so the joint search misses it."""
+    r = Retriever()
+    ts = terms(conclusion, hypotheses)
+    names = [n for n, _ in r.lemmas(session, ts)[:top]]
+    for t in ts:
+        for n, _ in r.lemmas(session, [t])[:per_term]:
+            if n not in names:
+                names.append(n)
+    return [f"{form} {name}." for name in names
             for form in ("exact", "apply", "intros; apply")]

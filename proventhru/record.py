@@ -111,8 +111,9 @@ class RecordLog:
             return e
 
     def episode(self, statement, preamble, environment, gate=None, policy=None,
-                search=None, weights=None):
-        return Episode(self, statement, preamble, environment, gate, policy, search, weights)
+                search=None, weights=None, protocol=None, item=None):
+        return Episode(self, statement, preamble, environment, gate, policy, search, weights,
+                       protocol, item)
 
     def annotate(self, target_seq, label, reason, by="unknown"):
         """A later statement about entry target_seq. The entry is not touched."""
@@ -141,13 +142,19 @@ def no_phase():
 class Episode:
     """One statement's attempt, written as it happens."""
 
-    def __init__(self, log, statement, preamble, environment, gate, policy, search, weights):
+    def __init__(self, log, statement, preamble, environment, gate, policy, search, weights,
+                 protocol=None, item=None):
         self.log = log
         self.id = uuid.uuid4().hex
-        e = log.append("episode", {
-            "episode": self.id, "statement": statement, "preamble": preamble,
-            "preamble_sha256": sha256(preamble), "environment": environment,
-            "gate": gate, "policy": policy, "search": search, "weights": weights})
+        data = {"episode": self.id, "statement": statement, "preamble": preamble,
+                "preamble_sha256": sha256(preamble), "environment": environment,
+                "gate": gate, "policy": policy, "search": search, "weights": weights}
+        # Optional (added after v1's first records): absent, not null, when unused.
+        if protocol is not None:
+            data["protocol"] = protocol
+        if item is not None:
+            data["item"] = item
+        e = log.append("episode", data)
         self.seq = e["seq"]
 
     def proposal(self, path, policy, candidates, cost=None):
@@ -332,12 +339,14 @@ def corpus(entries):
                                  "preamble_sha256": d["preamble_sha256"],
                                  "environment": d["environment"],
                                  "gate": (d.get("gate") or {}).get("status"),
-                                 "standing": None, "proof": [], "kernel": None,
+                                 "policy": d.get("policy"), "search": d.get("search"),
+                                 "protocol": d.get("protocol"), "item": d.get("item"),
+                                 "stats": None, "standing": None, "proof": [], "kernel": None,
                                  "opened": e["seq"], "closed": None, "annotations": []}
         elif e["kind"] == "outcome":
             row = eps[d["episode"]]
             row.update(standing=d["standing"], proof=d["proof"], kernel=d["kernel"],
-                       closed=e["seq"])
+                       closed=e["seq"], stats=d.get("stats") or {})
             for a in notes.get(e["seq"], []) + notes.get(row["opened"], []):
                 row["annotations"].append({k: a[k] for k in ("seq", "label", "reason", "by")})
                 if a["label"] in ("unsound", "retracted") and row["standing"] in ("proved", "refuted"):

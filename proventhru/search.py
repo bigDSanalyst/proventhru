@@ -68,22 +68,35 @@ class SearchResult:
     steps: list = field(default_factory=list)
     expansions: int = 0
     seconds: float = 0.0
+    stopped: str = None     # what ended an unproved search: frontier, budget, step_budget
 
     def record(self):
         return {"statement": self.statement, "proved": self.proved,
                 "proof": list(self.proof),
                 "kernel": None if self.certificate is None else self.certificate.verdict,
                 "kernel_detail": None if self.certificate is None else self.certificate.detail,
-                "expansions": self.expansions, "seconds": round(self.seconds, 2),
+                "expansions": self.expansions, "invocations": self.expansions,
+                "seconds": round(self.seconds, 2), "stopped": self.stopped,
                 "steps": [s.record() for s in self.steps]}
 
 
-def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=None):
+def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=None,
+               step_budget=None):
     """Expand nodes in order of (cumulative reward, policy score). A kernel
     rejection does not end the search: the trajectory records it and other
     branches continue. A kernel that did not check (not_checked) does not
     count as proved either. With an episode (record.Episode), every policy
-    call and every step is written to the run record as it happens."""
+    call and every step is written to the run record as it happens.
+
+    Two budgets, either or both: `budget` caps expansions (policy
+    invocations: one propose() per expanded node), `step_budget` caps steps.
+    A step is one tactic submitted to env.step, whatever came of it: ok,
+    error, refused by the guard, or timed out all count. Queries a policy
+    makes on its own account (retrieval's Search) are not steps; a lemma
+    retrieval proposes counts once it is tried as a tactic. The search stops
+    before the step that would exceed step_budget, even in the middle of a
+    node's candidates, so two policies matched on steps ran exactly as many
+    tactics, however many candidates each offers per call."""
     t0 = time.perf_counter()
     root = env.reset()
     if hasattr(policy, "bind"):
@@ -93,15 +106,34 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
     seen = {root.obs.key}
     steps, expansions = [], 0
     last_failure = None
-    while frontier and expansions < budget:
+
+    def unproved(why):
+        return SearchResult(env.statement, False, (), None, steps, expansions,
+                            time.perf_counter() - t0, why)
+
+    while frontier:
+        if budget is not None and expansions >= budget:
+            return unproved("budget")
+        if step_budget is not None and len(steps) >= step_budget:
+            return unproved("step_budget")
         cost, _, node = heapq.heappop(frontier)
         if node.depth >= max_depth:
             continue
         expansions += 1
-        candidates = policy.propose(node.obs, node.path, last_failure)
+        try:
+            candidates = policy.propose(node.obs, node.path, last_failure)
+        except Exception as e:
+            # A policy that fails (a model API that stayed down) still leaves
+            # its call in the record, with the failure in its cost.
+            if episode:
+                episode.proposal(node.path, policy.identity, [],
+                                 getattr(e, "cost", None) or policy.last_cost)
+            raise
         prop = (episode.proposal(node.path, policy.identity, candidates, policy.last_cost)
                 if episode else None)
         for tactic, score in candidates:
+            if step_budget is not None and len(steps) >= step_budget:
+                return unproved("step_budget")
             st = env.step(node, tactic)
             steps.append(st)
             if episode:
@@ -121,5 +153,4 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
             seen.add(st.node.obs.key)
             heapq.heappush(frontier, (cost - st.reward - 0.01 * score
                                       + 0.001 * st.node.obs.size, next(tie), st.node))
-    return SearchResult(env.statement, False, (), None, steps, expansions,
-                        time.perf_counter() - t0)
+    return unproved("frontier")
