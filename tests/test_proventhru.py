@@ -130,6 +130,187 @@ class TestRecord(unittest.TestCase):
                                            "label": "note", "reason": "x"})
 
 
+class FakeBlock:
+    def __init__(self, text):
+        self.type, self.text = "text", text
+
+
+class FakeUsage:
+    def __init__(self):
+        self.input_tokens, self.output_tokens = 900, 120
+        self.cache_read_input_tokens, self.cache_creation_input_tokens = 700, 0
+
+
+class FakeResponse:
+    def __init__(self, payload, stop_reason="end_turn"):
+        import json
+        self.content = [FakeBlock(json.dumps(payload) if not isinstance(payload, str) else payload)]
+        self.usage, self.stop_reason, self.model = FakeUsage(), stop_reason, "claude-opus-5-5"
+
+
+class FakeClient:
+    """Stands in for anthropic.Anthropic: returns scripted responses and keeps
+    every request, so tests can read what the model would have been sent."""
+
+    def __init__(self, script):
+        self.script, self.requests = list(script), []
+        outer = self
+
+        class Messages:
+            def create(self, **kw):
+                outer.requests.append(kw)
+                return outer.script.pop(0)
+
+        class Beta:
+            messages = Messages()
+        self.beta = Beta()
+
+
+class TestView(unittest.TestCase):
+    def test_hypotheses_are_split_by_name(self):
+        from proventhru.view import hypotheses
+        self.assertEqual(hypotheses("n, m : nat"),
+                         [{"name": "n", "type": "nat"}, {"name": "m", "type": "nat"}])
+        self.assertEqual(hypotheses("x := 3 : nat"),
+                         [{"name": "x", "type": "nat", "value": "3"}])
+
+    def test_state_carries_every_goal_and_the_exact_error(self):
+        from proventhru.goals import Goal, Observation
+        from proventhru.view import state
+        obs = Observation((Goal(1, "0 + 0 = 0"), Goal(2, "S n + 0 = S n", ("n : nat",))))
+        err = "In environment\nn : nat\nUnable to unify \"0\" with \"n\"."
+        v = state(obs, ["intros n.", "induction n."],
+                  {"path": [], "tactic": "exact I.", "outcome": "error", "error": err})
+        self.assertEqual(v["goal_count"], 2)
+        self.assertEqual(v["goals"][1]["hypotheses"], [{"name": "n", "type": "nat"}])
+        self.assertEqual(v["last_failure"]["error"], err)       # verbatim
+        self.assertIs(v["given_up"], False)
+
+
+class TestClaudePolicy(unittest.TestCase):
+    def _policy(self, script, **kw):
+        from proventhru.policy_claude import ClaudePolicy
+        self.client = FakeClient(script)
+        return ClaudePolicy("Require Import Arith.", client=self.client, **kw)
+
+    def _obs(self):
+        from proventhru.goals import Goal, Observation
+        return Observation((Goal(1, "forall n : nat, n + 0 = n"),))
+
+    def test_request_shape(self):
+        pol = self._policy([FakeResponse({"candidates": []})])
+        pol.propose(self._obs(), ())
+        r = self.client.requests[0]
+        self.assertEqual(r["model"], "claude-opus-5-5")
+        self.assertEqual(r["system"][0]["cache_control"], {"type": "ephemeral"})
+        fmt = r["output_config"]["format"]
+        self.assertEqual(fmt["type"], "json_schema")
+        enum = fmt["schema"]["properties"]["candidates"]["items"]["properties"]["tactic"]["enum"]
+        self.assertIn("lia", enum)
+        self.assertNotIn("omega", enum)          # removed from Coq 8.17 and Rocq 9
+        self.assertEqual(r["output_config"]["effort"], "medium")
+        self.assertEqual(r["fallbacks"], "default")
+        self.assertNotIn("thinking", r)          # adaptive by default on this model
+
+    def test_candidates_assembled_checked_and_costed(self):
+        pol = self._policy([FakeResponse({"candidates": [
+            {"tactic": "intros", "argument": "n"},
+            {"tactic": "lia", "argument": ""},
+            {"tactic": "simpl", "argument": "; auto"},          # a tactical: dropped
+            {"tactic": "lia", "argument": ""},                  # duplicate: dropped
+            {"tactic": "rewrite", "argument": "<- Nat.add_comm"}]})])
+        got = pol.propose(self._obs(), ())
+        self.assertEqual([t for t, _ in got], ["intros n.", "lia.", "rewrite <- Nat.add_comm."])
+        self.assertEqual(len(pol.last_cost["dropped"]), 2)
+        self.assertEqual(pol.last_cost["input_tokens"], 900)
+        for t, _ in got:
+            self.assertIsNone(guard(t), t)
+
+    def test_refusal_and_bad_json_give_no_candidates(self):
+        pol = self._policy([FakeResponse({"candidates": []}, stop_reason="refusal"),
+                            FakeResponse("not json")])
+        self.assertEqual(pol.propose(self._obs(), ()), [])
+        self.assertEqual(pol.last_cost["stop_reason"], "refusal")
+        self.assertEqual(pol.propose(self._obs(), ()), [])
+        self.assertEqual(pol.last_cost["dropped"][0]["why"], "not JSON")
+
+    def test_max_calls_caps_spend(self):
+        pol = self._policy([FakeResponse({"candidates": []})], max_calls=1)
+        pol.propose(self._obs(), ())
+        self.assertEqual(pol.propose(self._obs(), ()), [])
+        self.assertEqual(len(self.client.requests), 1)
+
+
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestClaudePolicyInSearch(unittest.TestCase):
+    def test_last_failure_reaches_the_next_call_and_everything_is_recorded(self):
+        import json
+        from proventhru import record as rec
+        from proventhru.env import CoqEnv
+        from proventhru.policy_claude import ClaudePolicy
+        from proventhru.search import best_first
+        from proventhru.pipeline import environment
+        client = FakeClient([
+            FakeResponse({"candidates": [{"tactic": "exact", "argument": "I"},
+                                         {"tactic": "intros", "argument": "n"}]}),
+            FakeResponse({"candidates": [{"tactic": "nia", "argument": ""}]}),
+        ])
+        stmt = "forall n : nat, n * n >= n"
+        with tempfile.TemporaryDirectory() as d:
+            log = rec.RecordLog(os.path.join(d, "r.jsonl"))
+            pol = ClaudePolicy("Require Import Arith Lia.", client=client)
+            with CoqEnv(stmt, "Require Import Arith Lia.", backend="coqtop") as env:
+                ep = log.episode(stmt, env.preamble, environment(env.preamble, "coqtop"),
+                                 policy=pol.identity)
+                res = best_first(env, pol, budget=5, episode=ep)
+            self.assertTrue(res.proved)
+            self.assertEqual(list(res.proof), ["intros n.", "nia."])
+            sent = json.loads(client.requests[1]["messages"][0]["content"])
+            failed = [s for s in res.steps if s.tactic == "exact I."][0]
+            self.assertEqual(sent["last_failure"]["tactic"], "exact I.")
+            self.assertEqual(sent["last_failure"]["error"], failed.error)   # verbatim
+            props = [e["data"] for e in log.entries if e["kind"] == "proposal"]
+            self.assertEqual(props[0]["policy"]["model"], "claude-opus-5-5")
+            self.assertEqual(props[0]["cost"]["output_tokens"], 120)
+            self.assertEqual(rec.verify(log.entries), [])
+
+
+class TestReport(unittest.TestCase):
+    def test_distribution_flags_a_collapsed_policy(self):
+        from proventhru.report import distribution
+        flat = distribution(["intros n.", "simpl.", "rewrite H.", "lia.", "auto.", "split."])
+        collapsed = distribution(["lia."] * 8 + ["auto."] * 8 + ["intros."])
+        self.assertEqual(flat["entropy"], 1.0)
+        self.assertGreater(collapsed["top3_share"], 0.99)
+        self.assertLess(collapsed["entropy"], flat["entropy"])
+
+
+class TestPoolAcquire(unittest.TestCase):
+    """Worker choice without a prover: no process is started here."""
+
+    def test_callers_arriving_together_get_different_workers(self):
+        from proventhru.pool import Pool
+        pool = Pool(size=3)
+        got = [pool.acquire() for _ in range(3)]       # none has launched yet
+        self.assertEqual(len({id(w) for w in got}), 3)
+
+    def test_a_sequential_caller_reuses_the_launched_idle_worker(self):
+        from proventhru.pool import Pool
+        pool = Pool(size=3)
+        first = pool.acquire()
+        first.gen = 1                                   # as if its process started
+        self.assertIs(pool.acquire(), first)
+        self.assertIs(pool.acquire(), first)
+
+    def test_a_busy_launched_worker_is_passed_over(self):
+        from proventhru.pool import Pool
+        pool = Pool(size=2)
+        first = pool.acquire()
+        first.gen = 1
+        with first.lock:                                # mid-request
+            self.assertIsNot(pool._choose(), first)
+
+
 class TestStatement(unittest.TestCase):
     def test_sentence_breaks_are_refused(self):
         from proventhru.session import check_statement

@@ -160,11 +160,52 @@ kernel rejects the proof at `Qed` because the recursion is ill-formed, and that
 step's reward is negative. The guard condition, universe constraints and axioms
 are only checked there.
 
+## The v1 model policy
+
+`proventhru.policy_claude.ClaudePolicy` asks Claude (default `claude-opus-5-5`)
+for the next tactic. It makes one API call per expanded node.
+
+- **What the model sees** (`proventhru/view.py`, fixed once): every goal with
+  its hypotheses split into name and type, the goal count, the shelved count,
+  `given_up`, the tactic path so far, and the last failed attempt with Coq's
+  exact error string.
+- **What it may answer:** up to `k` ranked candidates. Each is a tactic name
+  from a fixed vocabulary of 24 standard-library tactics plus an argument.
+  Structured outputs restrict the name to the vocabulary. The argument is
+  checked (no `;`, `||`, `try` or second sentence), and `env.guard` checks the
+  result again. `omega` is not in the vocabulary: it was removed in Coq 8.17
+  and is absent from Rocq 9, and `lia` replaces it.
+- **No reflection step, no lemma retrieval, and no combinators in v1.**
+  They wait for a baseline to measure them against.
+- **Every call is recorded** with its model, token counts and latency.
+  Dropped candidates are recorded with why, and a refusal is recorded as a
+  call with no candidates. Server-side refusal fallbacks are on.
+
+Evaluate against the baseline on the same statements, at equal expansions
+(the baseline tries about 19 tactics per expansion, the model at most `k`):
+
+```sh
+export ANTHROPIC_API_KEY=...                 # or: ant auth login
+proventhru run examples/eval_open.txt --out out/fixed  --budget 30
+proventhru run examples/eval_open.txt --out out/claude --budget 30 \
+           --policy claude --effort medium --max-calls 800
+proventhru report out/fixed/records.jsonl out/claude/records.jsonl
+```
+
+`examples/eval_open.txt` holds 24 statements the gate leaves open, filtered
+from 40 candidates. The 13 in `examples/conjectures.txt` are too few, because
+the gate settles 8 of them before any search. The baseline proves 8 of the 24
+at budget 30 (about 10,000 tactic attempts) and 9 at budget 200 (54,000).
+
+`report` also shows how the tactics are distributed: across everything
+proposed, across the steps that ran, and across finished proofs, with each
+distribution's top-3 share and normalised entropy. A policy that has collapsed
+to `lia`, `auto` and `congruence` on every step shows a top-3 share near 1.
+
 ## What is not built yet
 
-- **An LLM policy.** `search.Policy.propose(obs, path) -> [(tactic, score)]`
-  is the interface. `FixedTactics` is a baseline with no learning in it, so
-  the loop runs end to end today.
+- **Reflection (grounded critique).** v2, once v1 has a measured baseline;
+  the exact error string it needs is already in the policy's view.
 - **Premise retrieval.** Most open conjectures need a library lemma.
 - **oscillate-.** `CoqEnv(observers=[fn])` calls `fn(step)` on every step;
   that is where a phase reader attaches. It is not implemented here.

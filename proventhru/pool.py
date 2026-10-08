@@ -41,6 +41,7 @@ class Worker:
         self.client = None
         self.gen = 0
         self.sessions = 0
+        self.claimed = False    # some session has been assigned to it
         self.bases = {}         # preamble -> (state after it, generation)
         self.dir = tempfile.mkdtemp(prefix=f"proventhru-pet{index}-")
 
@@ -128,17 +129,25 @@ class Pool:
         self._lock = threading.Lock()
 
     def acquire(self):
-        """The worker for a new session: a running worker that is idle right
-        now, else one not yet started (so concurrent callers spread out and a
-        sequential caller pays one launch, not one per worker), else round
-        robin over all of them."""
+        """The worker for a new session: one that has launched and is idle
+        right now, else one no session has been given yet, else round robin.
+
+        A worker is claimed when a session is assigned to it, before its
+        process starts (that happens on the session's first request). Until
+        it has launched it counts as busy, so callers arriving together get
+        different workers instead of all picking the first unstarted one,
+        and a sequential caller still pays one launch, not one per worker."""
         with self._lock:
-            running = [w for w in self.workers if w.client is not None]
-            idle = [w for w in running if not w.lock.locked()]
-            fresh = [w for w in self.workers if w.client is None]
-            w = idle[0] if idle else fresh[0] if fresh else next(self._next)
+            w = self._choose()
+            w.claimed = True
         w.opened()
         return w
+
+    def _choose(self):
+        idle = [w for w in self.workers
+                if w.claimed and w.gen > 0 and not w.lock.locked()]
+        fresh = [w for w in self.workers if not w.claimed]
+        return idle[0] if idle else fresh[0] if fresh else next(self._next)
 
     def close(self):
         for w in self.workers:

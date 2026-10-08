@@ -27,8 +27,10 @@ class Policy:
     identity = {"id": "unknown", "model": None, "provider": None}
     last_cost = None
 
-    def propose(self, obs, path):
-        """Return [(tactic, score)], higher score tried first."""
+    def propose(self, obs, path, last_failure=None):
+        """Return [(tactic, score)], higher score tried first. last_failure is
+        the most recent refused or timed-out attempt in this episode,
+        {path, tactic, outcome, error} with Coq's message verbatim, or None."""
         raise NotImplementedError
 
 
@@ -39,7 +41,7 @@ class FixedTactics(Policy):
                "assumption.", "trivial.", "nia."]
     SHAPERS = ["intros.", "simpl.", "split.", "constructor.", "f_equal."]
 
-    def propose(self, obs, path):
+    def propose(self, obs, path, last_failure=None):
         out = [(t, 1.0) for t in self.CLOSERS] + [(t, 0.5) for t in self.SHAPERS]
         if obs.goals:
             g = obs.goals[0]
@@ -88,12 +90,13 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
     frontier = [(0.0, next(tie), root)]
     seen = {root.obs.key}
     steps, expansions = [], 0
+    last_failure = None
     while frontier and expansions < budget:
         cost, _, node = heapq.heappop(frontier)
         if node.depth >= max_depth:
             continue
         expansions += 1
-        candidates = policy.propose(node.obs, node.path)
+        candidates = policy.propose(node.obs, node.path, last_failure)
         prop = (episode.proposal(node.path, policy.identity, candidates, policy.last_cost)
                 if episode else None)
         for tactic, score in candidates:
@@ -101,6 +104,9 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
             steps.append(st)
             if episode:
                 episode.step(st, proposal=prop)
+            if st.outcome != "ok":
+                last_failure = {"path": list(node.path), "tactic": st.tactic,
+                                "outcome": st.outcome, "error": st.error}
             if st.node is None:
                 continue
             if st.done:

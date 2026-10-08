@@ -1,5 +1,5 @@
 """proventhru gate STATEMENT | prove STATEMENT | run FILE
-          | verify RECORD | corpus RECORD | annotate RECORD SEQ"""
+          | verify RECORD | corpus RECORD | annotate RECORD SEQ | report RECORD..."""
 import argparse
 import json
 import sys
@@ -12,8 +12,35 @@ from . import record as rec
 
 
 def _statements(path):
+    """Statements one per line; '#' lines are comments, except a
+    '# preamble: ...' line, which sets the preamble for the file."""
+    preamble, out = None, []
     with open(path) as fh:
-        return [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+        for ln in fh:
+            s = ln.strip()
+            if s.startswith("# preamble:"):
+                preamble = s[len("# preamble:"):].strip()
+            elif s and not s.startswith("#"):
+                out.append(s)
+    return preamble, out
+
+
+def _policy(a, preamble):
+    if a.policy == "fixed":
+        return FixedTactics()
+    from .policy_claude import ClaudePolicy
+    return ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
+                        max_calls=a.max_calls)
+
+
+def _policy_args(p):
+    p.add_argument("--policy", choices=["fixed", "claude"], default="fixed")
+    p.add_argument("--model", default="claude-opus-5-5")
+    p.add_argument("--effort", default="medium",
+                   choices=["low", "medium", "high", "xhigh", "max"])
+    p.add_argument("--k", type=int, default=5, help="candidates per model call")
+    p.add_argument("--max-calls", type=int, default=None,
+                   help="stop calling the model after this many calls (cost cap)")
 
 
 def main(argv=None):
@@ -29,10 +56,14 @@ def main(argv=None):
     p.add_argument("statement")
     p.add_argument("--budget", type=int, default=200)
     p.add_argument("--trace", action="store_true", help="print every step")
+    _policy_args(p)
     r = sub.add_parser("run", help="the loop over a file of conjectures, one per line")
     r.add_argument("file")
     r.add_argument("--out", default="out")
     r.add_argument("--budget", type=int, default=200)
+    _policy_args(r)
+    rp = sub.add_parser("report", help="compare runs from their records")
+    rp.add_argument("records", nargs="+")
     v = sub.add_parser("verify", help="check a run record's chain and every entry")
     v.add_argument("record")
     c = sub.add_parser("corpus", help="each episode's standing, annotations applied")
@@ -45,6 +76,10 @@ def main(argv=None):
     n.add_argument("--by", default="unknown")
     a = ap.parse_args(argv)
 
+    if a.cmd == "report":
+        from .report import render
+        print(render(a.records))
+        return 0
     if a.cmd == "verify":
         entries = rec.load(a.record)
         problems = rec.verify(entries)
@@ -67,7 +102,7 @@ def main(argv=None):
         return 0 if res.status != "ill_formed" else 1
     if a.cmd == "prove":
         with CoqEnv(a.statement, a.preamble, backend=a.backend) as env:
-            res = best_first(env, FixedTactics(), budget=a.budget)
+            res = best_first(env, _policy(a, a.preamble), budget=a.budget)
         if a.trace:
             for s in res.steps:
                 print(f"{s.reward:+.2f} {s.tactic:30} {s.error or ('done' if s.done else '')}")
@@ -78,8 +113,10 @@ def main(argv=None):
             print(res.certificate.detail)
         return 0 if res.proved else 1
     if a.cmd == "run":
-        summary = run(_statements(a.file), a.out, a.preamble, budget=a.budget,
-                      backend=a.backend)
+        file_preamble, stmts = _statements(a.file)
+        preamble = file_preamble or a.preamble
+        summary = run(stmts, a.out, preamble, policy=_policy(a, preamble),
+                      budget=a.budget, backend=a.backend)
         print(json.dumps(summary))
         return 0
 
