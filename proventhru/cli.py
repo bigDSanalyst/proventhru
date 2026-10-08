@@ -27,10 +27,15 @@ def _statements(path):
 
 def _policy(a, preamble):
     if a.policy == "fixed":
-        return FixedTactics()
-    from .policy_claude import ClaudePolicy
-    return ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
-                        max_calls=a.max_calls)
+        pol = FixedTactics()
+    else:
+        from .policy_claude import ClaudePolicy
+        pol = ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
+                           max_calls=a.max_calls)
+    if a.retrieval:
+        from .retrieval import RetrievalPolicy
+        pol = RetrievalPolicy(pol, top=a.retrieval)
+    return pol
 
 
 def _policy_args(p):
@@ -41,6 +46,8 @@ def _policy_args(p):
     p.add_argument("--k", type=int, default=5, help="candidates per model call")
     p.add_argument("--max-calls", type=int, default=None,
                    help="stop calling the model after this many calls (cost cap)")
+    p.add_argument("--retrieval", type=int, default=0, metavar="N",
+                   help="also offer the N best-matching library lemmas at each node")
 
 
 def main(argv=None):

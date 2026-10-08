@@ -77,7 +77,7 @@ leave the default `auto`, which uses petanque when it is installed.
 Both backends pass the same tests. On the 13 statements in
 `examples/conjectures.txt` they give identical gate verdicts and proof
 results; `tools/compare_backends.py` checks this and exits 1 on any
-disagreement. End to end, Petanque takes 10.5 s and coqtop 21.3 s. Most of
+disagreement. End to end, Petanque takes 6.4 s and coqtop 23.7 s. Most of
 what remains on proved statements is the kernel check, which compiles a
 fresh file on purpose. Search step counts differ slightly because Petanque's
 richer observations change the order of the frontier.
@@ -109,10 +109,9 @@ stack from apt and git. The PyPI package called `pytanque` is unrelated; the
 `[petanque]` extra pins LLM4Rocq's client by commit.
 
 On the 13 statements in `examples/conjectures.txt` the baseline gives:
-3 proved, 1 refuted, 7 rejected (5 trivial, 1 vacuous, 1 ill-formed) and
-2 left open. The open ones
-are `rev (rev l) = l` and the even/odd lemma; both need a lemma the
-fixed-tactic baseline never tries.
+2 proved, 1 refuted, 9 rejected and 1 left open. The 9 rejected are
+5 trivial, 2 already in the library (`rev (rev l) = l` is `rev_involutive`),
+1 vacuous and 1 ill-formed.
 
 ## The environment interface
 
@@ -192,21 +191,56 @@ proventhru run examples/eval_open.txt --out out/claude --budget 30 \
 proventhru report out/fixed/records.jsonl out/claude/records.jsonl
 ```
 
-`examples/eval_open.txt` holds 24 statements the gate leaves open, filtered
-from 40 candidates. The 13 in `examples/conjectures.txt` are too few, because
-the gate settles 8 of them before any search. The baseline proves 8 of the 24
-at budget 30 (about 10,000 tactic attempts) and 9 at budget 200 (54,000).
+`examples/eval_open.txt` holds 29 statements the gate leaves open, filtered
+from 50 candidates. The 13 in `examples/conjectures.txt` are too few, because
+the gate settles 12 of them before any search. The fixed-tactic baseline
+proves 10 of the 29 at budget 30 and 11 at budget 200. With premise retrieval
+(below) it proves 15 and 18.
 
 `report` also shows how the tactics are distributed: across everything
 proposed, across the steps that ran, and across finished proofs, with each
 distribution's top-3 share and normalised entropy. A policy that has collapsed
 to `lia`, `auto` and `congruence` on every step shows a top-3 share near 1.
 
+## Premise retrieval
+
+The fixed tactics never name a lemma, so a goal like `length (rev (l ++ l)) =
+2 * length l`, which needs `length_rev` and `length_app`, is out of reach
+however long the search runs. `proventhru.retrieval` asks Coq's own `Search`
+which lemmas mention what the first goal mentions (its constants and
+operators, without bound variables or common type names). It ranks them by
+how many of the goal's terms they cover, equations first, and offers the top N
+as `rewrite L`, `rewrite <- L` and `apply L`. Searches are cached per term set.
+
+```sh
+proventhru run examples/eval_open.txt --out out/retrieval --budget 30 --retrieval 6
+```
+
+`RetrievalPolicy` wraps any policy, the Claude one included, so a model gets
+the same lemmas. On the 29-statement evaluation set (Pétanque, Rocq 9.1.1):
+
+| | no retrieval | retrieval, 6 lemmas |
+|---|---|---|
+| budget 30 | 10 / 29 | 15 / 29 |
+| budget 200 | 11 / 29 | 18 / 29 |
+
+At budget 200, retrieval gained 7 statements and lost none. At budget 30 it
+lost one (`3 ^ n >= 1`), because the extra candidates use part of a small
+budget. The proofs chain lemmas, for example `rewrite rev_app_distr. f_equal.
+apply rev_involutive. apply rev_involutive.` Total `Search` time was 10.6 s
+over the 29 searches, and wall time fell (232 s to 198 s) because proofs come
+sooner.
+
+**The gate rejects library lemmas.** A statement that one library lemma
+closes (`exact L`, `apply L`, or `intros; apply L` when the binders come in
+another order) is `trivial`, with the lemma in the script:
+`rev (rev l) = l` is `rev_involutive`, not a discovery. Without this check,
+12 of the first 24 evaluation statements were "proved" by citing themselves.
+
 ## What is not built yet
 
 - **Reflection (grounded critique).** v2, once v1 has a measured baseline;
   the exact error string it needs is already in the policy's view.
-- **Premise retrieval.** Most open conjectures need a library lemma.
 - **oscillate-.** `CoqEnv(observers=[fn])` calls `fn(step)` on every step;
   that is where a phase reader attaches. It is not implemented here.
 - **Training (DPO, then GRPO).** The run record holds every step, failed

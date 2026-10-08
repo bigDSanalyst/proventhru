@@ -1,27 +1,33 @@
-# The eval set for v1 policies: 24 statements the gate leaves open
-# (filtered from 40 candidates; the gate settles the other 16 in one tactic).
+# The eval set: 29 statements the gate leaves open, from 50 candidates.
+# The gate rejects one-tactic statements, including any that one library
+# lemma closes (exact / apply / intros; apply): those are known, not found.
 # preamble: Require Import Arith Lia List. Import ListNotations.
 forall n : nat, n * n >= n
 forall n : nat, Nat.even n = true \/ Nat.odd n = true
-forall l : list nat, rev (rev l) = l
 forall n : nat, 2 ^ n >= n + 1
-forall l1 l2 : list nat, length (l1 ++ l2) = length l1 + length l2
-forall l : list nat, length (rev l) = length l
-forall (f : nat -> nat) (l : list nat), length (map f l) = length l
-forall (f : nat -> nat) (l1 l2 : list nat), map f (l1 ++ l2) = map f l1 ++ map f l2
-forall l1 l2 : list nat, rev (l1 ++ l2) = rev l2 ++ rev l1
 forall n m : nat, n <= m -> exists k, m = n + k
 forall n : nat, n = 0 \/ exists m, n = S m
 forall n : nat, Nat.even (n + n) = true
-forall (A : Type) (l : list A), length l = 0 -> l = []
 forall n : nat, fold_left plus (repeat 1 n) 0 = n
-forall n : nat, length (repeat 0 n) = n
-forall (A : Type) (l : list A) (n : nat), length (firstn n l) <= n
 forall (A B : Type) (f : A -> B) (l : list A), rev (map f l) = map f (rev l)
 forall (A : Type) (l : list A), l = [] \/ exists x t, l = x :: t
-forall n : nat, Nat.odd (2 * n + 1) = true
-forall l : list nat, fold_right plus 0 (l ++ [0]) = fold_right plus 0 l
-forall n : nat, Nat.div2 (2 * n) = n
 forall n : nat, 0 < 2 ^ n
-forall (A : Type) (l1 l2 : list A), length (l1 ++ l2) = length (l2 ++ l1)
-forall n : nat, Nat.sqrt (n * n) = n
+forall l : list nat, length (rev (l ++ l)) = 2 * length l
+forall l1 l2 : list nat, length (rev (l1 ++ l2)) = length l1 + length l2
+forall (f : nat -> nat) (l : list nat), length (rev (map f l)) = length l
+forall (A : Type) (l1 l2 : list A), rev (rev l1 ++ rev l2) = l2 ++ l1
+forall l : list nat, map (fun x => x + 0) l = l
+forall l : list nat, map (fun x => x * 1) l = l
+forall (f g : nat -> nat) (l : list nat), map f (map g l) = map (fun x => f (g x)) l
+forall l : list nat, fold_right plus 0 (rev l) = fold_right plus 0 l
+forall n : nat, Nat.even (2 * n + 2) = true
+forall n m : nat, Nat.even (n * m) = true \/ Nat.odd (n * m) = true
+forall n : nat, n < 2 ^ n
+forall n : nat, 1 <= 2 ^ n
+forall n : nat, 3 ^ n >= 1
+forall n : nat, n <= n * n
+forall a b : nat, a < b -> exists c, b = a + S c
+forall (A : Type) (x : A) (l : list A), In x l -> In x (rev l)
+forall l : list nat, fold_left plus l 0 = fold_right plus 0 l
+forall n : nat, fold_right plus 0 (repeat 2 n) = 2 * n
+forall n : nat, fold_right plus 0 (seq 0 n) * 2 = n * (n - 1)

@@ -311,6 +311,73 @@ class TestPoolAcquire(unittest.TestCase):
             self.assertIsNot(pool._choose(), first)
 
 
+class TestRetrievalParts(unittest.TestCase):
+    """Retrieval without a prover: terms, parsing, ranking."""
+
+    def test_terms_skip_bound_names_and_take_operators(self):
+        from proventhru.retrieval import terms
+        self.assertEqual(terms("forall l1 l2 : list nat, length (rev (l1 ++ l2)) = length l1 + length l2"),
+                         ["length", "rev", '"++"', '"+"'])
+        self.assertEqual(terms("rev (map f l) = map f (rev l)", ("A, B : Type", "f : A -> B", "l : list A")),
+                         ["rev", "map"])
+
+    def test_parse_both_backends_formats_and_drop_generated_and_private_names(self):
+        from proventhru.retrieval import parse
+        coqtop = ("rev_app_distr: forall [A : Type] (x y : list A), rev (x ++ y) = rev y ++ rev x\n"
+                  "list_ind: forall (A : Type) (P : list A -> Prop), P [] -> ...\n")
+        pet = ("rev_app_distr:\n  forall [A : Type] (x y : list A),\n  rev (x ++ y) = rev y ++ rev x\n"
+               "Nat.PrivateImplementsBitwiseSpec.div2_double: forall n, Nat.div2 (2 * n) = n\n")
+        want = [("rev_app_distr", "forall [A : Type] (x y : list A), rev (x ++ y) = rev y ++ rev x")]
+        self.assertEqual(parse(coqtop), want)
+        self.assertEqual(parse(pet), want)
+
+    def test_rank_prefers_covering_equations(self):
+        from proventhru.retrieval import rank
+        found = [("rev_unit", "forall l a, rev (l ++ [a]) = a :: rev l"),
+                 ("length_rev", "forall l, length (rev l) = length l"),
+                 ("rev_length_le", "forall l, length (rev l) <= length l")]
+        self.assertEqual(rank(found, ["length", "rev"])[0][0], "length_rev")
+
+    def test_head_of_a_composite_tactic(self):
+        from proventhru.report import head
+        self.assertEqual(head("simpl; rewrite IHn."), "simpl")
+        self.assertEqual(head("lia."), "lia")
+
+
+class TestRetrieval:
+    BACKEND = None
+    PRE = "Require Import Arith Lia List. Import ListNotations."
+
+    def test_gate_rejects_a_library_lemma_as_known(self):
+        from proventhru.gate import classify
+        res = classify("forall l : list nat, rev (rev l) = l", self.PRE, backend=self.BACKEND)
+        self.assertEqual(res.status, "trivial")
+        self.assertIn("library", res.detail)
+        res = classify("forall (A : Type) (l : list A) (n : nat), firstn n l ++ skipn n l = l",
+                       self.PRE, backend=self.BACKEND)
+        self.assertEqual(res.script, ("intros; apply firstn_skipn.",))   # binder order differs
+
+    def test_retrieval_proves_what_the_baseline_cannot(self):
+        from proventhru.env import CoqEnv
+        from proventhru.retrieval import RetrievalPolicy
+        from proventhru.search import best_first, FixedTactics
+        stmt = "forall (f : nat -> nat) (l : list nat), length (rev (map f l)) = length l"
+        with CoqEnv(stmt, self.PRE, backend=self.BACKEND) as env:
+            plain = best_first(env, FixedTactics(), budget=8)
+        with CoqEnv(stmt, self.PRE, backend=self.BACKEND) as env:
+            pol = RetrievalPolicy(FixedTactics())
+            res = best_first(env, pol, budget=8)
+        self.assertFalse(plain.proved)
+        self.assertTrue(res.proved)
+        self.assertEqual(res.certificate.verdict, "accepted")
+        # The proof cites a library lemma (length_rev in Rocq 9, rev_length in
+        # Coq 8.18): a rewrite or apply of a name that is not a hypothesis.
+        cited = [t for t in res.proof if t.startswith(("rewrite ", "apply "))
+                 and not t.split()[-1].rstrip(".").startswith(("IH", "H"))]
+        self.assertTrue(cited, res.proof)
+        self.assertIn("lemmas", pol.last_cost)
+
+
 class TestStatement(unittest.TestCase):
     def test_sentence_breaks_are_refused(self):
         from proventhru.session import check_statement
@@ -418,7 +485,8 @@ class TestGate:
                  "forall n : nat, n = n": "trivial",
                  "forall n : nat, n < 0 -> n = 5": "vacuous",
                  "forall n m : nat, n + m = n": "refuted",
-                 "forall l : list nat, rev (rev l) = l": "open"}
+                 "forall l : list nat, rev (rev l) = l": "trivial",          # rev_involutive
+                 "forall (f : nat -> nat) (l : list nat), length (rev (map f l)) = length l": "open"}
         for stmt, want in cases.items():
             res = classify(stmt, backend=self.BACKEND)
             self.assertEqual(res.status, want, stmt)
@@ -474,7 +542,7 @@ def _per_backend(mixin, name, backend, available, why):
     globals()[name] = unittest.skipUnless(available, why)(cls)
 
 
-for _mixin in (TestEnv, TestKernel, TestGate, TestPipeline):
+for _mixin in (TestEnv, TestKernel, TestGate, TestPipeline, TestRetrieval):
     _per_backend(_mixin, _mixin.__name__ + "Coqtop", "coqtop", HAVE_COQ,
                  "coqtop/coqc not in PATH")
     _per_backend(_mixin, _mixin.__name__ + "Petanque", "petanque", HAVE_PET,
