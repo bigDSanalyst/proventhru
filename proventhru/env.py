@@ -44,6 +44,16 @@ BANNED = re.compile(
     r"Unshelve|Focus|Unfocus|Proof|Timeout|Fail|Redirect|Time)\b")
 
 
+# An action is a tactic, never a command. In Rocq every vernacular command
+# begins with a capital letter (Cd, Register, Print, Search, Optimize, ...) and
+# every tactic with a lowercase one, so the allowlist is on the first token,
+# after an optional goal selector (all:, 2:, 1-3:, [n]:). Probing the earlier
+# blocklist found Cd, Register and Optimize Heap running mid-proof; Cd moves
+# the working directory of a pet worker shared by later sessions.
+SELECTOR = r"(?:all|par|!|\d+(?:\s*-\s*\d+)?(?:\s*,\s*\d+(?:\s*-\s*\d+)?)*|\[\s*\w+\s*\])\s*:\s*"
+SELECTOR_RE = re.compile(rf"^{SELECTOR}")
+
+
 def guard(tactic):
     """Return why a tactic is refused, or None if it may run."""
     t = tactic.strip()
@@ -53,6 +63,10 @@ def guard(tactic):
         return "one sentence per action, no comments"
     if re.match(r"^[-+*{}]", t):
         return "bullets and braces are not actions; the env works on the first goal"
+    sel = SELECTOR_RE.match(t)
+    body = t[sel.end():] if sel else t
+    if not re.match(r"[a-z(]", body):
+        return "an action is a tactic: it starts with a lowercase tactic name, not a command"
     m = BANNED.search(t)
     if m:
         return f"'{m.group(1)}' is not an action"
