@@ -104,11 +104,16 @@ with CoqEnv("forall n : nat, n + 0 = n") as env:
 - **Statement**: one term. `open_session` refuses a statement that contains
   a sentence break, so `True. Axiom cheat : False` cannot run commands of its
   own in the session or in the kernel's certificate.
-- **Action**: one tactic sentence. `env.guard` refuses anything that ends the
-  proof on the agent's terms or changes the session: `admit`, `Admitted`,
-  `Axiom`, `Require`, `BackTo`, `Qed`, bullets, and more than one sentence per
-  action. Each tactic runs under Coq's `Timeout`, with a hard process deadline
-  behind it.
+- **Action**: one tactic sentence, never a command. `env.guard` admits a
+  sentence only if its first token (after an optional goal selector like
+  `all:` or `2:`) is lowercase: in Rocq every vernacular command starts with
+  a capital letter and every tactic with a lowercase one. A blocklist inside
+  the tactic still refuses `admit`, `give_up`, `Admitted`, `Axiom`,
+  `Require` and the like, and more than one sentence per action is refused.
+  Each tactic runs under Coq's `Timeout`, with a hard process deadline
+  behind it. (The earlier blocklist-only guard let `Cd`, `Register` and
+  `Optimize Heap` run mid-proof; none could write a file, but `Cd` moved the
+  working directory of a shared `pet` worker.)
 - **Transition**: `session.run(handle, tactic)`. Every handle the session has
   returned can be run from again, so search branches and backtracks freely
   (see Backends). A session killed at the hard deadline is rebuilt from the

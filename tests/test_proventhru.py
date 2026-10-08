@@ -25,7 +25,23 @@ class TestGuard(unittest.TestCase):
 
     def test_allows_tactics_and_qualified_names(self):
         for t in ["intros n m.", "rewrite Nat.add_comm.", "induction n; simpl; auto.",
-                  "apply (f_equal S)."]:
+                  "apply (f_equal S).", "all: lia.", "2: reflexivity.", "1-2: auto.",
+                  "(intros; auto).", "try (simpl; reflexivity).", "now rewrite IHn."]:
+            self.assertIsNone(guard(t), t)
+
+    def test_refuses_commands(self):
+        """Commands that run mid-proof and change the session: found by probing
+        the earlier blocklist, which let them through."""
+        for t in ['Cd "/tmp".', "Register nat as evil.nat.", "Optimize Heap.",
+                  "Print LoadPath.", "Search nat.", "Show.", "Check nat.",
+                  'Extraction "x.ml" nat.', "all: Cd \"/tmp\"."]:
+            self.assertIsNotNone(guard(t), t)
+
+    def test_baseline_policy_only_proposes_actions(self):
+        from proventhru.goals import Goal, Observation
+        from proventhru.search import FixedTactics
+        obs = Observation((Goal(1, "n + 0 = n", ("n : nat", "IHn : n = n")),))
+        for t, _ in FixedTactics().propose(obs, ()):
             self.assertIsNone(guard(t), t)
 
 
