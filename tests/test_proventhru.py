@@ -29,6 +29,16 @@ class TestGuard(unittest.TestCase):
             self.assertIsNone(guard(t), t)
 
 
+class TestStatement(unittest.TestCase):
+    def test_sentence_breaks_are_refused(self):
+        from proventhru.session import check_statement
+        for bad in ["True. Axiom cheat : False", "True.", "1 = 1 (* hi *)"]:
+            with self.assertRaises(ValueError, msg=bad):
+                check_statement(bad)
+        for ok in ["forall n : nat, Nat.add n 0 = n", "1.5 = 1.5"]:
+            check_statement(ok)
+
+
 class TestParse(unittest.TestCase):
     def test_two_goals(self):
         obs = goals.parse("2 goals (ID 7)\n  \n  n : nat\n  IHn : n + 0 = n\n"
@@ -119,6 +129,7 @@ class TestGate:
     def test_statuses(self):
         from proventhru.gate import classify
         cases = {"forall n, n + 1": "ill_formed",
+                 "True. Axiom cheat : False": "ill_formed",
                  "forall n : nat, foo n": "ill_formed",
                  "forall n : nat, n = n": "trivial",
                  "forall n : nat, n < 0 -> n = 5": "vacuous",
@@ -167,8 +178,7 @@ class TestPetanqueRecovery(unittest.TestCase):
         from proventhru.env import CoqEnv
         with CoqEnv("forall n : nat, n + 0 = n", backend="petanque") as env:
             a = env.step(env.reset(), "intros n.").node
-            env.session.client.process.kill()
-            env.session._dead()
+            env.session.worker.kill()
             st = env.step(a, "induction n.")
             self.assertIsNone(st.error)
             self.assertEqual(len(st.node.obs.goals), 2)
@@ -179,6 +189,92 @@ class TestPetanqueRecovery(unittest.TestCase):
             a = env.step(env.reset(), "intros n m.").node
             b = env.step(a, "induction n.").node
             self.assertEqual(b.obs.goals[1].hypotheses[-1], "IHn : n + m = m + n")
+
+
+@unittest.skipUnless(HAVE_PET, "pet (coq-lsp) or pytanque not installed")
+class TestPool(unittest.TestCase):
+    STMT = "forall n : nat, n + 0 = n"
+
+    def test_second_session_reuses_the_process(self):
+        import time
+        from proventhru.pool import Pool
+        from proventhru.petanque import PetanqueSession
+        pool = Pool(size=1)
+        try:
+            PetanqueSession("", self.STMT, pool=pool).close()          # launches pet
+            t0 = time.perf_counter()
+            s = PetanqueSession("", "forall n : nat, n * 1 = n", pool=pool)
+            elapsed = time.perf_counter() - t0
+            s.close()
+            self.assertEqual(pool.workers[0].gen, 1, "one process served both")
+            self.assertLess(elapsed, 0.3)
+        finally:
+            pool.close()
+
+    def test_sessions_on_one_worker_are_isolated(self):
+        from proventhru.pool import Pool
+        from proventhru.petanque import PetanqueSession
+        pool = Pool(size=1)
+        try:
+            a = PetanqueSession("Definition two := 2.", "two = 2", pool=pool)
+            b = PetanqueSession("", self.STMT, pool=pool)
+            self.assertIs(a.worker, b.worker)
+            with self.assertRaises(Exception):
+                b.query(b.root, "Check two.")
+            h, obs = a.run(a.root, "reflexivity.")
+            self.assertTrue(obs.finished)
+            a.close(), b.close()
+        finally:
+            pool.close()
+
+    def test_kill_on_a_shared_worker_is_recovered_by_the_other_session(self):
+        """Session a's runaway tactic kills the worker at a's deadline; b's
+        handles were made in the dead process and are rebuilt from their path."""
+        from proventhru.pool import Pool
+        from proventhru.petanque import PetanqueSession
+        from proventhru.session import CoqTimeout
+        pool = Pool(size=1)
+        try:
+            a = PetanqueSession("", "True", deadline=1.0, pool=pool)
+            b = PetanqueSession("", self.STMT, pool=pool)
+            hb, _ = b.run(b.root, "intros n.")
+            gen = pool.workers[0].gen
+            with self.assertRaises(CoqTimeout):
+                a.run(a.root, "repeat (assert True by trivial).")   # no Rocq Timeout
+            _, obs = b.run(hb, "induction n.")
+            self.assertEqual(len(obs.goals), 2)
+            self.assertGreater(pool.workers[0].gen, gen)
+            a.close(), b.close()
+        finally:
+            pool.close()
+
+    def test_sessions_on_different_workers_run_in_parallel(self):
+        import threading
+        from proventhru.pool import Pool
+        from proventhru.petanque import PetanqueSession
+        pool = Pool(size=2)
+        results, errors = [], []
+
+        def prove(stmt):
+            try:
+                s = PetanqueSession("", stmt, pool=pool)
+                h, _ = s.run(s.root, "intros n.")
+                _, obs = s.run(h, "induction n; simpl; auto.")
+                results.append(obs.finished)
+                s.close()
+            except Exception as e:                      # surfaced below
+                errors.append(repr(e))
+        try:
+            ts = [threading.Thread(target=prove, args=(st,)) for st in
+                  ["forall n : nat, n + 0 = n", "forall n : nat, n * 1 = n",
+                   "forall n : nat, 0 + n = n", "forall n : nat, n - 0 = n"]]
+            [t.start() for t in ts]
+            [t.join(60) for t in ts]
+            self.assertEqual(errors, [])
+            self.assertEqual(results, [True] * 4)
+            self.assertEqual({w.gen for w in pool.workers}, {1})
+        finally:
+            pool.close()
 
 
 if __name__ == "__main__":

@@ -1,27 +1,29 @@
 """The Petanque backend: coq-lsp's machine-to-machine protocol, via Pytanque.
 
 Petanque keeps every proof state it returns, so a handle is the state itself:
-running from any earlier node costs one request, with no rewind and no replay.
-It also reports the hypotheses of every goal (coqtop prints only the first
-goal's).
+running from any earlier node costs one request, with no rewind and no
+replay. It also reports the hypotheses of every goal (coqtop prints only the
+first goal's).
 
-`pet` runs over stdio, one process per session. Rocq's Timeout bounds each
-tactic; behind it a watchdog kills the process at the hard deadline. A killed
-process loses its states, so handles also carry their tactic path and the
-process generation: a stale handle is rebuilt by replaying its path, which is
-the only time this backend replays anything.
+Sessions do not own a process: each is bound to a worker of a shared pool of
+`pet` processes (pool.py), and starts with `Goal <statement>.` from the
+worker's already loaded preamble state: ~1 ms, against ~550 ms to launch pet
+and load the preamble. The kernel check still compiles a fresh file
+(kernel.py), so nothing a session does in the shared process can reach it.
+
+Rocq's Timeout bounds each tactic; behind it the worker is killed at the hard
+deadline. A killed or restarted
+worker loses its states, so handles also carry their tactic path and the
+worker generation they were made in: a stale handle is rebuilt by replaying
+its path, which is the only time this backend replays anything.
 """
 import os
 import shutil
-import tempfile
-import threading
 from dataclasses import dataclass, field
 
 from .goals import Goal, Observation
-from .session import CoqNotFound, CoqTimeout, TacticError
-
-THEOREM = "pt_goal"
-
+from .pool import default_pool
+from .session import CoqNotFound, TacticError
 
 @dataclass(frozen=True)
 class Handle:
@@ -46,109 +48,94 @@ def observation(goals_response, finished):
             hyps.append(f"{names}{body} : {' '.join(h.ty.split())}")
         evar = (g.info or {}).get("evar") or [None, 0]
         goals.append(Goal(int(evar[-1] or 0), " ".join(g.ty.split()), tuple(hyps)))
-    shelved = len(goals_response.shelf or [])
-    return Observation(tuple(goals), shelved, False)
+    return Observation(tuple(goals), len(goals_response.shelf or []), False)
+
+
+def _message(err):
+    msg = err.message
+    return msg[len("Coq: "):] if msg.startswith("Coq: ") else msg
 
 
 class PetanqueSession:
     name = "petanque"
 
-    def __init__(self, preamble, statement, deadline=30.0):
+    def __init__(self, preamble, statement, deadline=30.0, pool=None):
         if shutil.which("pet") is None:
             raise CoqNotFound("pet (coq-lsp) not in PATH")
-        from pytanque import Pytanque, PytanqueMode, PetanqueError
-        self._Pytanque, self._mode, self._PetanqueError = Pytanque, PytanqueMode, PetanqueError
+        from pytanque import PetanqueError
+        self._PetanqueError = PetanqueError
         self.preamble, self.statement, self.deadline = preamble, statement, deadline
         bindir = os.path.dirname(shutil.which("pet"))
         rocq = os.path.join(bindir, "rocq")
         self.compiler = [rocq, "compile"] if os.path.exists(rocq) else ["coqc"]
-        self.dir = tempfile.mkdtemp(prefix="proventhru-pet-")
-        self.file = os.path.join(self.dir, "Goal.v")
-        with open(self.file, "w") as fh:
-            fh.write(f"{preamble.strip()}\n\nTheorem {THEOREM} : {statement}.\nProof.\nAdmitted.\n")
-        self.gen = 0
-        self.client = None
-        self._start()
+        self.worker = (pool or default_pool()).acquire()
+        self._root()
 
-    def _call(self, fn, *args, **kw):
-        """One request under the hard deadline."""
-        fired = []
+    def _call(self, method, *args, **kw):
+        return self.worker.call(self.deadline, method, *args, **kw)
 
-        def kill():
-            fired.append(True)
-            if self.client and self.client.process:
-                self.client.process.kill()
-        timer = threading.Timer(self.deadline, kill)
-        timer.start()
-        try:
-            return fn(*args, **kw)
-        except self._PetanqueError as e:
-            if fired:
-                self._dead()
-                raise CoqTimeout(f"no response after {self.deadline}s")
-            if self.client.process.poll() is not None:
-                self._dead()
-                raise RuntimeError(f"pet exited: {e}")
-            raise
-        finally:
-            timer.cancel()
-
-    def _dead(self):
-        try:
-            self.client.close()
-        except Exception:
-            pass
-        self.client = None
-
-    def _start(self):
-        self.client = self._Pytanque(mode=self._mode.STDIO)
-        self.client.connect()
-        self.gen += 1
-        try:
-            st = self._call(self.client.start, self.file, THEOREM)
-        except self._PetanqueError as e:
-            self.close()
-            raise ValueError(f"statement does not elaborate: {e.message}") from None
-        self.root = Handle((), st, self.gen)
+    def _root(self):
+        for attempt in (0, 1):
+            try:
+                base, gen = self.worker.base(self.deadline, self.preamble)
+            except self._PetanqueError as e:
+                raise ValueError(f"preamble does not load: {_message(e)}") from None
+            try:
+                st, gen = self._call("run", base, f"Goal {self.statement}.")
+                break
+            except self._PetanqueError as e:
+                # The worker restarted between loading the preamble and this
+                # request: the base state was gone, which says nothing about
+                # the statement.
+                if attempt == 0 and self.worker.gen != gen:
+                    continue
+                raise ValueError(f"statement does not elaborate: {_message(e)}") from None
+        self.root = Handle((), st, gen)
         self.root_obs = self._observe(st)
 
     def _observe(self, st):
         if st.proof_finished:
             return Observation(finished=True)
-        return observation(self._call(self.client.complete_goals, st), False)
+        goals, _ = self._call("complete_goals", st)
+        return observation(goals, False)
 
     def _live(self, handle):
-        """The handle's state in the running process, replaying only if the
-        process that made it is gone."""
-        if self.client is None:
-            self._start()
-        if handle.gen == self.gen:
-            return handle.state
-        st = self.root.state
+        """The handle's state in the worker's current process, replaying its
+        path only if the process that made it is gone. Returns (state, gen)."""
+        if handle.gen == self.worker.gen and self.worker.client is not None:
+            return handle.state, handle.gen
+        if self.root.gen != self.worker.gen or self.worker.client is None:
+            self._root()
+        st, gen = self.root.state, self.root.gen
         for tac in handle.path:
-            st = self._call(self.client.run, st, tac)
-        return st
+            st, gen = self._call("run", st, tac)
+        return st, gen
+
+    def _run(self, handle, cmd, **kw):
+        """Run cmd from handle. If the worker restarted under us (another
+        session on it hit its deadline), the state we sent was already gone:
+        that is not Coq's verdict, so rebuild and try once more."""
+        for attempt in (0, 1):
+            st, gen = self._live(handle)
+            try:
+                return self._call("run", st, cmd, **kw)
+            except self._PetanqueError as e:
+                if attempt == 0 and self.worker.gen != gen:
+                    continue
+                raise TacticError(_message(e)) from None
 
     def run(self, handle, tactic, timeout=None):
-        st = self._live(handle)
         try:
-            new = self._call(self.client.run, st, tactic,
-                             timeout=int(timeout) if timeout else None)
-        except self._PetanqueError as e:
-            msg = e.message[len("Coq: "):] if e.message.startswith("Coq: ") else e.message
-            lines = msg.strip().splitlines()
+            new, gen = self._run(handle, tactic, timeout=int(timeout) if timeout else None)
+        except TacticError as e:
+            lines = str(e).strip().splitlines()
             raise TacticError(lines[-1] if lines else "error") from None
-        return Handle(handle.path + (tactic,), new, self.gen), self._observe(new)
+        return Handle(handle.path + (tactic,), new, gen), self._observe(new)
 
     def query(self, handle, command):
-        st = self._live(handle)
-        try:
-            out = self._call(self.client.run, st, command)
-        except self._PetanqueError as e:
-            raise TacticError(e.message) from None
+        out, _ = self._run(handle, command)
         return "\n".join(msg for _, msg in (out.feedback or []))
 
     def close(self):
-        if self.client:
-            self._dead()
-        shutil.rmtree(self.dir, ignore_errors=True)
+        """Release the session; the worker and its preamble state stay up for
+        the next one."""

@@ -18,6 +18,7 @@ hard deadline passes; the session stays usable after either.
 """
 import importlib.util
 import os
+import re
 import shutil
 
 
@@ -51,7 +52,16 @@ def resolve(backend=None):
     return backend
 
 
+def check_statement(statement):
+    """A statement is one term. A sentence break would let it run commands of
+    its own (`True. Axiom cheat : False`) in the session and in the kernel's
+    certificate."""
+    if re.search(r"\.(\s|$)", statement.strip()) or "(*" in statement:
+        raise ValueError("a statement is one term: no sentence-ending '.' and no comments")
+
+
 def open_session(preamble, statement, backend=None, deadline=30.0):
+    check_statement(statement)
     backend = resolve(backend)
     if backend == "petanque":
         from .petanque import PetanqueSession
