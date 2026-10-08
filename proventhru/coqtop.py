@@ -25,7 +25,7 @@ ERROR = re.compile(r"^(Error:|Toplevel input, characters)", re.M)
 
 
 from . import goals as goalparse
-from .session import CoqNotFound, CoqTimeout, TacticError
+from .session import CoqNotFound, CoqTimeout, TacticError, prover_identity
 
 
 class Coqtop:
@@ -108,6 +108,9 @@ class CoqtopSession:
             raise CoqNotFound("coqtop not in PATH")
         coqc = os.path.join(os.path.dirname(self.coqtop), "coqc")
         self.compiler = [coqc if os.path.exists(coqc) else "coqc"]
+        self.environment = {"backend": self.name, "prover": prover_identity(self.coqtop),
+                            "interface": f"coqtop -emacs ({self.coqtop})",
+                            "compiler": self.compiler[0]}
         self._start()
         self.root = ()
         self.root_obs = goalparse.parse(self.root_text)

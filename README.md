@@ -8,13 +8,40 @@ appears at three points in the loop:
 |---|---|---|---|
 | 1. Conjecture gate | `proventhru.gate` | Checks the statement elaborates as a `Prop`, then tries bounded attempts at a disproof, contradictory hypotheses, and a one-tactic proof | `ill_formed`, `refuted`, `vacuous`, `trivial` or `open` |
 | 2. Environment | `proventhru.env.CoqEnv` | Runs one tactic per step against a live `coqtop`, from any earlier node | New proof state or error, plus reward signals |
-| 3. Kernel | `proventhru.kernel` | Compiles the full proof from scratch with `coqc` and requires `Closed under the global context` | Admitted into the corpus, or rejected |
+| 3. Kernel | `proventhru.kernel` | Compiles the full proof from scratch and requires `Closed under the global context` | `accepted`, `rejected`, or `not_checked` (a timeout or missing compiler: not a failure) |
 
 ```
-conjectures ─▶ gate ─▶ open ─▶ best_first(CoqEnv, Policy) ─▶ kernel ─▶ corpus.jsonl
-                 │                    │ every step                  trajectories.jsonl
-                 └ refuted / rejected └▶ observers (phase readers)
+conjectures ─▶ gate ─▶ open ─▶ best_first(CoqEnv, Policy) ─▶ kernel
+                 │                    │ every proposal and step      │
+                 ▼                    ▼                              ▼
+              records.jsonl: one hash-chained run record (SCHEMA.md)
+                 │
+                 ├─▶ corpus      proved / refuted / open / rejected, annotations applied
+                 └─▶ trajectories  every step, with its session and kernel verdicts
 ```
+
+## The run record
+
+Everything is written to one append-only, hash-chained file, `records.jsonl`.
+Its schema is fixed in [SCHEMA.md](SCHEMA.md); the corpus and the
+trajectories are views of it, not files of their own. Each step records:
+- the full tactic path, so it replays from the statement alone;
+- the session's verdict on the step (`ok`, `error`, `refused`, `timeout`)
+  and, separately, the kernel's verdict on the proof (`accepted`, `rejected`,
+  `not_checked`);
+- the prover and version, the preamble, the policy's model and cost, and
+  null placeholders for oscillate's phase reading.
+
+A correction is an annotation, a new entry naming an older one by hash, never
+an edit:
+
+```sh
+proventhru verify   out/records.jsonl          # chain intact, every entry well formed
+proventhru corpus   out/records.jsonl          # standings, annotations applied
+proventhru annotate out/records.jsonl 42 --label unsound --reason "kernel bug in rocq-9.1.0"
+```
+
+The chain is the pattern of Dharmapala's run records (`runs.py`).
 
 ## Quick start
 
@@ -136,8 +163,8 @@ are only checked there.
 - **Premise retrieval.** Most open conjectures need a library lemma.
 - **oscillate-.** `CoqEnv(observers=[fn])` calls `fn(step)` on every step;
   that is where a phase reader attaches. It is not implemented here.
-- **Training (DPO, then GRPO).** `trajectories.jsonl` holds every step, failed
-  steps included, with signals and rewards.
+- **Training (DPO, then GRPO).** The run record holds every step, failed
+  steps included, with both verdicts and the reward; `record.steps()` reads them.
 
 ## Taken from pq-verify
 

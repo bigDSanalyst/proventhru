@@ -1,4 +1,5 @@
-"""proventhru gate STATEMENT | prove STATEMENT | run FILE"""
+"""proventhru gate STATEMENT | prove STATEMENT | run FILE
+          | verify RECORD | corpus RECORD | annotate RECORD SEQ"""
 import argparse
 import json
 import sys
@@ -7,6 +8,7 @@ from .env import CoqEnv, DEFAULT_PREAMBLE
 from .gate import classify
 from .search import best_first, FixedTactics
 from .pipeline import run
+from . import record as rec
 
 
 def _statements(path):
@@ -31,8 +33,34 @@ def main(argv=None):
     r.add_argument("file")
     r.add_argument("--out", default="out")
     r.add_argument("--budget", type=int, default=200)
+    v = sub.add_parser("verify", help="check a run record's chain and every entry")
+    v.add_argument("record")
+    c = sub.add_parser("corpus", help="each episode's standing, annotations applied")
+    c.add_argument("record")
+    n = sub.add_parser("annotate", help="append a statement about an earlier entry")
+    n.add_argument("record")
+    n.add_argument("seq", type=int)
+    n.add_argument("--label", required=True, choices=rec.LABELS)
+    n.add_argument("--reason", required=True)
+    n.add_argument("--by", default="unknown")
     a = ap.parse_args(argv)
 
+    if a.cmd == "verify":
+        entries = rec.load(a.record)
+        problems = rec.verify(entries)
+        size, head = rec.head(entries)
+        for m in problems:
+            print("  " + m)
+        print(f"{'FAILS' if problems else 'holds'}: {size} entries, head {head}")
+        return 1 if problems else 0
+    if a.cmd == "corpus":
+        for row in rec.corpus(rec.load(a.record)):
+            print(json.dumps(row))
+        return 0
+    if a.cmd == "annotate":
+        e = rec.RecordLog(a.record).annotate(a.seq, a.label, a.reason, a.by)
+        print(f"annotation {e['seq']} on entry {a.seq}: {a.label}")
+        return 0
     if a.cmd == "gate":
         res = classify(a.statement, a.preamble, backend=a.backend)
         print(json.dumps(res.record(), indent=2))

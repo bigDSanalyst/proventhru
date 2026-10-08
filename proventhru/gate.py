@@ -38,7 +38,7 @@ class GateResult:
     status: str
     detail: str = ""
     script: tuple = ()        # the closing tactic(s) for trivial / refuted
-    kernel: bool = None       # refuted: did the disproof certify?
+    kernel: str = None        # refuted: accepted | rejected | not_checked
 
     def record(self):
         return {"status": self.status, "detail": self.detail,
@@ -86,7 +86,7 @@ def classify(statement, preamble=DEFAULT_PREAMBLE, timeout=2, certify_disproof=T
     if tac:
         kern = None
         if certify_disproof:
-            kern = certify(preamble, f"~ ({statement})", [tac], compiler=compiler).ok
+            kern = certify(preamble, f"~ ({statement})", [tac], compiler=compiler).verdict
         return GateResult("refuted", "negation proved by a small instance", (tac,), kern)
 
     pos = open_session(preamble, statement, backend)
