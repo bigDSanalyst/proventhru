@@ -130,6 +130,32 @@ class TestRecord(unittest.TestCase):
                                            "label": "note", "reason": "x"})
 
 
+class TestPoolAcquire(unittest.TestCase):
+    """Worker choice without a prover: no process is started here."""
+
+    def test_callers_arriving_together_get_different_workers(self):
+        from proventhru.pool import Pool
+        pool = Pool(size=3)
+        got = [pool.acquire() for _ in range(3)]       # none has launched yet
+        self.assertEqual(len({id(w) for w in got}), 3)
+
+    def test_a_sequential_caller_reuses_the_launched_idle_worker(self):
+        from proventhru.pool import Pool
+        pool = Pool(size=3)
+        first = pool.acquire()
+        first.gen = 1                                   # as if its process started
+        self.assertIs(pool.acquire(), first)
+        self.assertIs(pool.acquire(), first)
+
+    def test_a_busy_launched_worker_is_passed_over(self):
+        from proventhru.pool import Pool
+        pool = Pool(size=2)
+        first = pool.acquire()
+        first.gen = 1
+        with first.lock:                                # mid-request
+            self.assertIsNot(pool._choose(), first)
+
+
 class TestStatement(unittest.TestCase):
     def test_sentence_breaks_are_refused(self):
         from proventhru.session import check_statement
