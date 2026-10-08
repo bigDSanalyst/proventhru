@@ -152,6 +152,7 @@ class RetrievalPolicy(Policy):
             lemmas = self.retriever.lemmas(self.env.session,
                                            terms(g.conclusion, g.hypotheses))[: self.top]
         have = {t for t, _ in out}
+        added = []
         for i, (name, stmt) in enumerate(lemmas):
             s = self.score - 0.01 * i
             forms = ([f"rewrite {name}.", f"rewrite <- {name}."] if " = " in stmt else [])
@@ -160,9 +161,12 @@ class RetrievalPolicy(Policy):
                 if t not in have:
                     have.add(t)
                     out.append((t, s))
+                    added.append(t)
         cost = dict(self.base.last_cost or {})
+        # added: the candidates retrieval contributed, so a report can tell the
+        # base policy's choices (a model's) from the lemmas appended to them.
         cost.update(retrieval_ms=round(self.retriever.ms - ms0, 1),
-                    lemmas=[n for n, _ in lemmas])
+                    lemmas=[n for n, _ in lemmas], added=added)
         self.last_cost = cost
         return out
 

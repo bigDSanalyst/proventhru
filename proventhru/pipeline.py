@@ -32,20 +32,66 @@ def environment(preamble, backend=None):
         s.close()
 
 
+class PolicyUnavailable(RuntimeError):
+    """A policy's backing service stayed down (policy_openai.ModelUnavailable
+    and the like set .unavailable = True). The run stops rather than turning
+    the rest of the list into failures that have nothing to do with the policy:
+    rerun the same command and it resumes."""
+
+
+def completed(entries, policy, search, protocol_sha):
+    """Statements already settled in this record under the same policy,
+    search and protocol: closed by an outcome that is not a crash. An
+    episode the gate settled has no search, and is settled too."""
+    eps, done = {}, set()
+    for e in entries:
+        d = e["data"]
+        if e["kind"] == "episode":
+            if (d.get("policy") == policy and d.get("search") in (search, None)
+                    and (d.get("protocol") or {}).get("sha256") == protocol_sha):
+                eps[d["episode"]] = d["statement"]
+        elif e["kind"] == "outcome" and d["episode"] in eps and "error" not in (d.get("stats") or {}):
+            done.add(eps[d["episode"]])
+    return done
+
+
 def run(statements, out_dir, preamble=DEFAULT_PREAMBLE, policy=None, budget=200,
-        observers=(), log=print, backend=None, weights=None):
+        observers=(), log=print, backend=None, weights=None, step_budget=None,
+        protocol=None, resume=True):
+    """protocol is protocol.load()'s result, or None. With one, the run is
+    checked against the frozen block before anything starts, and every
+    episode carries the protocol's hash. With resume, statements already
+    settled in the record under the same policy, search and protocol are
+    skipped, so an interrupted run continues where it stopped."""
     policy = policy or FixedTactics()
     weights = weights or RewardWeights()
+    statements = list(statements)
     os.makedirs(out_dir, exist_ok=True)
     book = rec.RecordLog(os.path.join(out_dir, RECORD))
     env_id = environment(preamble, backend)
+    planned = {"algorithm": "best_first", "budget": budget}
+    if step_budget is not None:
+        planned["step_budget"] = step_budget
+    stamp = None
+    if protocol is not None:
+        from .protocol import check
+        stamp = check(protocol, preamble, statements, policy.identity, env_id,
+                      {"budget": budget, "step_budget": step_budget})
+    elif (policy.identity or {}).get("prompt_sha256"):
+        log("warning: a model policy running without a protocol; its records cite none")
+    done = (completed(book.entries, policy.identity, planned, stamp and stamp["sha256"])
+            if resume else set())
     summary = {}
-    for stmt in statements:
+    for item, stmt in enumerate(statements):
+        if stmt in done:
+            summary["resumed"] = summary.get("resumed", 0) + 1
+            continue
         t0 = time.perf_counter()
         gate = classify(stmt, preamble, backend=backend)
-        search = ({"algorithm": "best_first", "budget": budget} if gate.status == "open" else None)
+        search = dict(planned) if gate.status == "open" else None
         ep = book.episode(stmt, preamble, env_id, gate=gate.record(), policy=policy.identity,
-                          search=search, weights=asdict(weights) if search else None)
+                          search=search, weights=asdict(weights) if search else None,
+                          protocol=stamp, item=item)
         if gate.status == "refuted":
             standing = "refuted" if gate.kernel == "accepted" else "open"
             ep.outcome(standing, gate.script, kernel=gate.kernel,
@@ -57,12 +103,18 @@ def run(statements, out_dir, preamble=DEFAULT_PREAMBLE, policy=None, budget=200,
             try:
                 with CoqEnv(stmt, preamble, observers=observers, backend=backend,
                             weights=weights) as env:
-                    res = best_first(env, policy, budget=budget, episode=ep)
+                    res = best_first(env, policy, budget=budget, episode=ep,
+                                     step_budget=step_budget)
             except Exception as e:
                 # The episode still closes: an attempt that crashed is open,
                 # and the record says why rather than ending mid-episode.
+                unavailable = getattr(e, "unavailable", False)
                 ep.outcome("open", stats={"error": repr(e)[:500],
+                                          "incomplete": "policy_unavailable" if unavailable
+                                          else "crashed",
                                           "seconds": round(time.perf_counter() - t0, 3)})
+                if unavailable:
+                    raise PolicyUnavailable(f"stopped at item {item}: {e}") from e
                 summary["open"] = summary.get("open", 0) + 1
                 log(f"{'open':9} {gate.status:10} {stmt}  (crashed: {e!r:.80})")
                 continue
@@ -71,7 +123,8 @@ def run(statements, out_dir, preamble=DEFAULT_PREAMBLE, policy=None, budget=200,
             ep.outcome(standing, res.proof if standing == "proved" else (),
                        kernel=None if cert is None else cert.verdict,
                        certificate_sha256=None if cert is None else cert.sha256,
-                       stats={"expansions": res.expansions, "steps": len(res.steps),
+                       stats={"expansions": res.expansions, "invocations": res.expansions,
+                              "steps": len(res.steps), "stopped": res.stopped,
                               "seconds": round(time.perf_counter() - t0, 3)})
         summary[standing] = summary.get(standing, 0) + 1
         log(f"{standing:9} {gate.status:10} {stmt}")

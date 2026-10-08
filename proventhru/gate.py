@@ -78,7 +78,12 @@ def classify(statement, preamble=DEFAULT_PREAMBLE, timeout=2, certify_disproof=T
     if not ok:
         return GateResult("ill_formed", detail)
 
-    neg = open_session(preamble, f"~ ({statement})", backend)
+    try:
+        neg = open_session(preamble, f"~ ({statement})", backend)
+    except ValueError as e:
+        # Check accepts terms that Goal does not, e.g. one with an implicit
+        # argument left uninferred (skipn n [] = []).
+        return GateResult("ill_formed", str(e)[-300:])
     try:
         tac = _first_closing(neg, counterexample_tactics(), timeout)
         compiler = neg.compiler

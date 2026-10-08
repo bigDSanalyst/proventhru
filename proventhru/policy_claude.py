@@ -15,11 +15,14 @@ Every call's model, token counts and latency become the proposal's `cost` in
 the run record; candidates the checks dropped are recorded beside it, so a
 policy that keeps proposing invalid actions shows up in the data.
 """
+import hashlib
+import inspect
 import json
 import re
 import time
 
 from . import view
+from .record import canon
 from .search import Policy
 
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -81,6 +84,14 @@ SCHEMA = {
 BAD_ARGUMENT = re.compile(r";|\|\||\(\*|\.\s|\.$|\n|\btry\b|\brepeat\b|\bdo\b")
 
 
+def prompt_sha256():
+    """The template, schema, vocabulary and state rendering this policy shows."""
+    return hashlib.sha256(canon({
+        "template": SYSTEM, "user": "view.state as json.dumps(sort_keys=True)",
+        "schema": SCHEMA, "vocabulary": list(VOCABULARY), "view": inspect.getsource(view),
+    }).encode()).hexdigest()
+
+
 def assemble(tactic, argument):
     """(name, argument) -> one tactic sentence, or None with the reason."""
     if tactic not in VOCABULARY:
@@ -107,7 +118,7 @@ class ClaudePolicy(Policy):
                                     preamble=preamble.strip() or "(none)")
         self.identity = {"id": "claude-fixed-vocab/v1", "model": model,
                          "provider": "anthropic", "effort": effort, "k": k,
-                         "vocabulary": list(VOCABULARY)}
+                         "prompt_sha256": prompt_sha256(), "vocabulary": list(VOCABULARY)}
         self.last_cost = None
 
     def _request(self, state):
