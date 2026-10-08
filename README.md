@@ -40,20 +40,39 @@ leave the default `auto`, which uses petanque when it is installed.
 | Prover | any Coq with `coqtop` (CI: 8.18) | Rocq 9.1 + coq-lsp's `pet` |
 | Handle | tactic path; rewinds with `BackTo` and replays | Petanque's own state; no replay |
 | Hypotheses | focused goal only | every goal |
-| Session start | 348 ms | 676 ms |
+| Process | one per session | a shared pool (`pool.py`) |
+| Session start | 343 ms | 1.7 ms (first one: ~690 ms to launch `pet` and load the preamble) |
 | Step from the same node | 0.5 ms | 1.4 ms |
 | Step alternating between two depth-15 branches | 9.5 ms, grows with depth | 1.5 ms, flat |
+| Gate on 8 statements | 10.6 s | 0.39 s |
 | Kernel check | `coqc` beside `coqtop` | `rocq compile` beside `pet` |
 
-Both backends pass the same 26 tests. On the 13 statements in
+Both backends pass the same tests. On the 13 statements in
 `examples/conjectures.txt` they give identical gate verdicts and proof
-results (`tools/compare_backends.py` checks this and exits 1 on any
-disagreement). Search step counts differ slightly because Petanque's richer
-observations change the order of the frontier. End to end, Petanque is
-currently slower (30.6 s against 22.4 s), because the gate opens three
-sessions per conjecture and a Petanque session costs twice as much to start.
-Reusing one `pet` process across sessions is the next fix. Petanque's
-advantage is deep branching search, which the per-step numbers show.
+results; `tools/compare_backends.py` checks this and exits 1 on any
+disagreement. End to end, Petanque takes 10.5 s and coqtop 21.3 s. Most of
+what remains on proved statements is the kernel check, which compiles a
+fresh file on purpose. Search step counts differ slightly because Petanque's
+richer observations change the order of the frontier.
+
+**The pet pool.** Loading the preamble (`Require Import Arith Lia List.`)
+is the expensive part: about 550 ms with the process launch, and about 200 ms
+even for a second document in the same process. Running
+`Goal <statement>.` from an already-loaded preamble state takes about 1 ms.
+So each worker loads a preamble once and every session starts from that
+state. States are immutable values, so nothing one session does is visible
+to the next; a test checks this.
+
+A session stays on one worker, because its states exist only in that
+process. A worker serves one request at a time; concurrent requests on one
+stdio process hang, which is measured and why this is a pool and not one
+process. A new session goes to an idle running worker first.
+
+When a tactic ignores Rocq's `Timeout`, the worker is killed at the hard
+deadline. The other sessions on that worker then rebuild their handles once
+from their tactic paths. Workers also restart after 200 sessions, to bound
+`pet`'s memory. `PROVENTHRU_PET_WORKERS` sets the size (default
+`min(4, cpus)`).
 
 Installing the Petanque backend: with opam,
 `opam install rocq-core.9.1.1 rocq-stdlib coq-lsp.0.2.5+9.1` and then
@@ -82,6 +101,9 @@ with CoqEnv("forall n : nat, n + 0 = n") as env:
 - **Observation** (`goals.Observation`): every goal's conclusion, the focused
   goal's hypotheses, and the shelved count. `key` is a hash of the state, used
   to detect loops.
+- **Statement**: one term. `open_session` refuses a statement that contains
+  a sentence break, so `True. Axiom cheat : False` cannot run commands of its
+  own in the session or in the kernel's certificate.
 - **Action**: one tactic sentence. `env.guard` refuses anything that ends the
   proof on the agent's terms or changes the session: `admit`, `Admitted`,
   `Axiom`, `Require`, `BackTo`, `Qed`, bullets, and more than one sentence per
@@ -116,8 +138,6 @@ are only checked there.
   that is where a phase reader attaches. It is not implemented here.
 - **Training (DPO, then GRPO).** `trajectories.jsonl` holds every step, failed
   steps included, with signals and rewards.
-- **One `pet` process shared across sessions**, so starting a Petanque
-  session costs one request instead of one process.
 
 ## Taken from pq-verify
 

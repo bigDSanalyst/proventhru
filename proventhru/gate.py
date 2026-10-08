@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from .env import DEFAULT_PREAMBLE
 from .kernel import certify
-from .session import CoqTimeout, TacticError, open_session
+from .session import CoqTimeout, TacticError, check_statement, open_session
 
 TRIVIAL = ("reflexivity.", "intros; reflexivity.", "auto.", "intros; lia.",
            "intros; congruence.", "intuition.", "tauto.", "intros; discriminate.")
@@ -57,6 +57,10 @@ def _first_closing(session, tactics, timeout):
 
 
 def elaborates(statement, preamble=DEFAULT_PREAMBLE, backend=None):
+    try:
+        check_statement(statement)
+    except ValueError as e:
+        return False, str(e)
     s = open_session(preamble, "True", backend)
     try:
         s.query(s.root, f"Check ({statement} : Prop).")
