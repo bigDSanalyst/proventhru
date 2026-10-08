@@ -171,10 +171,21 @@ class RetrievalPolicy(Policy):
         return out
 
 
-def library_closers(session, conclusion, hypotheses=(), top=8):
+def library_closers(session, conclusion, hypotheses=(), top=8, per_term=4):
     """Candidates that close a goal with one library lemma: what the gate tries
     before calling a statement open. `intros; apply L` covers a lemma that
-    quantifies in another order (firstn_skipn is stated forall n l)."""
-    lemmas = Retriever().lemmas(session, terms(conclusion, hypotheses))[:top]
-    return [f"{form} {name}." for name, _ in lemmas
+    quantifies in another order (firstn_skipn is stated forall n l).
+
+    The lemmas are the best `top` that mention all the goal's terms, then the
+    best `per_term` for each term alone: an instance of a library lemma
+    (rev (rev (filter f l)) = filter f l is rev_involutive) mentions terms the
+    lemma does not, so the joint search misses it."""
+    r = Retriever()
+    ts = terms(conclusion, hypotheses)
+    names = [n for n, _ in r.lemmas(session, ts)[:top]]
+    for t in ts:
+        for n, _ in r.lemmas(session, [t])[:per_term]:
+            if n not in names:
+                names.append(n)
+    return [f"{form} {name}." for name in names
             for form in ("exact", "apply", "intros; apply")]
