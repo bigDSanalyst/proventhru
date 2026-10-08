@@ -8,7 +8,8 @@ behind it. A change is an amendment: a new commit, logged at the bottom with
 its reason, so it has a new hash, and the records show which version each
 run was under.
 
-Stage: **v1, development.** The sets, environment, conditions, budgets and
+Stage: **v2, development** (v2 adds the limitations, the M1-first
+sequence, the choice of M1 and the Colab install rule). The sets, environment, conditions, budgets and
 analysis are fixed. No prompt and no model are frozen yet, so model policies
 may run on the dev set only. The amendment that freezes the prompt and names
 the models opens the held-out sets to them.
@@ -86,6 +87,16 @@ The Colab run (the primary model) must install exactly Coq 8.18.0, and the
 fixed baselines are compared with model runs on that same prover version.
 The record's `environment.prover` is the evidence for this.
 
+**Colab install.** Colab's apt Coq is older than 8.18, so Coq 8.18.0 is
+installed with opam (about 15 to 20 minutes), and the opam switch is cached
+on Google Drive so later sessions reuse it. Using apt's Coq and noting the
+deviation is not allowed: `lia` and `auto` change between versions, so a
+baseline on one version doesn't measure the same thing as a model run on
+another. **Fallback, only if opam cannot install 8.18.0 on Colab:** an
+amendment moves the whole experiment, baselines included, to the Coq that
+Colab can run. All conditions are rerun there, and the deviation is stated
+with the results. That gives a worse result, but a real one.
+
 ## Definitions
 
 - **Step**: one tactic submitted to the session, whatever its outcome: ok,
@@ -117,20 +128,36 @@ and what fails the checks is counted (below).
 
 ## Models
 
-- **M1, primary: open weights, pinned, in Colab under vLLM.** This is the
-  model later fine-tuned (DPO, then GRPO), so its baseline here is the first
-  point of one line of models measured on one test set. Named with its exact
-  Hugging Face revision in the freezing amendment.
-- **M2, second family: the HF Inference Providers router.** The provider is
-  pinned in the model name (`org/model:provider`), and every call records the
-  served model and provider. The router is also used for prompt tuning on
-  `dev`. Caveat: one low-budget run on `test` is up to about 12,000 calls
-  (about 14M tokens), more than the router's free allowance. If that can't
-  be paid for, M2 is a second open-weight family in Colab instead. That is
-  decided in the freezing amendment, before any held-out model run.
+**M1 first; M2 only if M1 shows an effect.** M2 is a robustness check of an
+effect M1 found. If M1 doesn't beat the fixed bars, the finding is that this
+model adds no reasoning over fixed tactics at matched effort, and a second
+family would not change what that means. So M2 is set up, registered and
+run only if at least one of M1's primary comparisons is significant (below).
+Running M2 then costs no extra Colab and vLLM setup until there is something
+for it to check.
 
-Both are named in the frozen block's `models` by the amendment that freezes
-the prompt. Until then, `check()` refuses them on held-out sets.
+- **M1: `Qwen/Qwen2.5-3B-Instruct`, pinned by revision hash, served by vLLM
+  in Colab, fp16, temperature 0.** M1 is the model that is fine-tuned
+  afterwards (DPO, then GRPO), so it is chosen as the model those can
+  actually run on: one free Colab T4 (16 GB, no bf16). A 3B model serves in
+  fp16 with room for the KV cache, and trains with LoRA in fp16 on that GPU.
+  A 7B model would need quantising to serve on a T4 (the fine-tuned and
+  served weights would then differ by a quantisation step), and GRPO on 7B
+  does not fit at all. The weights are pinned by the Hugging Face revision
+  (commit) hash, not by name. The baseline, the DPO model and the GRPO model
+  are the same weights at that revision, plus each stage's adapter, served
+  the same way. The freezing amendment records the revision hash and the
+  vLLM version, and `models` registers the served name
+  `Qwen/Qwen2.5-3B-Instruct@<revision>`. If a larger GPU becomes the
+  standing setup, a 7B M1 is a new amendment made before any held-out M1
+  run, never after one.
+- **M2 (if run): a second open-weight family, in Colab the same way.** At up
+  to about 12,000 calls (about 14M tokens) per low-budget run on `test`, the
+  HF router's free allowance can't carry a held-out run. The router is used
+  for prompt tuning on `dev` only.
+
+Each model is named in the frozen block's `models` by the amendment that
+freezes the prompt. Until then, `check()` refuses it on held-out sets.
 
 ## Runs
 
@@ -139,11 +166,19 @@ dev set the fixed policy spends 19.4 steps per expansion (coqtop, Coq
 8.18.0), so 600 steps is about the 30 expansions the dev baselines were
 first measured at. At k=5, 600 steps is up to 120 model calls per statement.
 
-- Low budget, every model: C and D on `test`, C on `test_renamed`.
+- Low budget, M1 (and M2 if it runs): C and D on `test`, C on
+  `test_renamed`.
 - High budget, M1 only: C and D on `test`. At up to 400 calls per
   statement, the high budget is affordable only on local weights.
 - Fixed policies, both budgets: A and B on `test`. Low budget: A on
   `test_renamed` (the rename check).
+
+**Baselines are rerun under the version the model runs use.** A
+comparison is between records citing one protocol version, so A and B are
+rerun on `test` under the freezing amendment (they're cheap). The v1
+baselines (`results/v1-baselines.md`) remain the record of the difficulty
+and rename checks, and the reruns must reproduce their counts. If they
+don't, that is reported and investigated before any model result is read.
 
 A run counts only when every statement in it finished. A model API that
 stays down stops the run, which is resumed by rerunning it. Responses are
@@ -153,25 +188,26 @@ result, and the report marks it.
 
 ## Analysis
 
-**Primary**: four comparisons at the low step budget, each on the 120
+**Primary**: M1's two comparisons at the low step budget, each on the 120
 `test` statements, paired by statement, with an exact two-sided McNemar
 test on the discordant pairs:
 
-1. M1: C vs A
-2. M1: D vs B
-3. M2: C vs A
-4. M2: D vs B
+1. M1: C vs A (bar: A's 22 of 120 in v1)
+2. M1: D vs B (bar: B's 22 of 120 in v1)
 
-Holm-adjusted over these four at α = 0.05. The effect is reported as the
-difference in statements proved, with the discordant counts. With 120
-statements, about 6 discordant pairs all one way are needed for p < 0.05 on
-one comparison. Differences smaller than that are reported as such, not as
-"no effect".
+Holm-adjusted over these two at α = 0.05. "Beats the bar" means significant
+here, not a higher raw count. The effect is reported as the difference in
+statements proved, with the discordant counts. About 6 discordant pairs all
+one way are needed for p < 0.05 on one comparison.
+
+**Replication (only if a primary comparison is significant)**: M2's same
+comparison(s), each at α = 0.05, as a check that the effect isn't one
+model's.
 
 **Secondary** (reported, not tested for significance unless stated):
 
 - M1's two comparisons at the high step budget
-- Q3: C on `test` vs C on `test_renamed`, by item, McNemar, per model
+- Q3: C on `test` vs C on `test_renamed`, by item, McNemar, per model run
 - invocations per proof and per statement
 - failures, split three ways: **api** (calls that failed: timeouts, 429,
   5xx, and retries), **invalid** (responses that were unusable, candidates
@@ -188,6 +224,35 @@ one comparison. Differences smaller than that are reported as such, not as
 budgets) after looking at held-out results. Any such change is a new
 amendment, and the held-out runs are repeated under it. Results under the
 earlier version are still reported.
+
+## Limitations
+
+**The study is powered for large effects only.** At 120 statements, a
+comparison needs a lopsided split of discordant pairs to reach
+significance. A non-significant result means that any effect is smaller than
+this study can detect, not that there is none. An example from v1: B against
+A at 2000 steps, 32 against 26 with 12 and 6 discordant, p = 0.24. That
+does not show retrieval failing to help at 2000 steps. It shows that an
+effect of that size can't be told from chance here.
+
+**A null with a symmetric split is a different thing.** B against A at 600
+steps: 22 and 22, with 9 discordant pairs each way, p = 1. That is not
+"too few data". Many statements changed hands, in equal numbers both ways.
+Retrieval changes which statements get proved at that budget (it gains list
+laws that need a lemma and loses arithmetic ones whose steps it spent on
+lemmas), not how many. It is a finding about retrieval at matched effort,
+and it is why D's bar of 22 is a real bar, not noise.
+
+**The earlier dev-set retrieval gain was confounded.** At matched
+expansions, retrieval went from 10 to 15 on `dev` at budget 30, partly
+because it tries more tactics per expansion. Every comparison here is at
+matched steps.
+
+**Other limits.** The statements are generated, and hold on 2,000 random
+inputs, not by proof. They come from one signature (stdlib `nat` and `list
+nat` functions) and one generator, so results say nothing yet about other
+domains. The rename control changes Coq's generated names too (see Sets).
+One prover, coqtop 8.18.0.
 
 ## Frozen
 
@@ -236,4 +301,5 @@ Checked by `protocol.check()` on every run.
 
 | version | commit | change | why |
 |---|---|---|---|
-| v1 | (this commit) | first registration: sets, environment, conditions, budgets, analysis. No prompt or model frozen | |
+| v1 | `1e6b8ef` | first registration: sets, environment, conditions, budgets, analysis. No prompt or model frozen | |
+| v2 | (this commit) | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
