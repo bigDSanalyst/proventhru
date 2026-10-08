@@ -11,6 +11,7 @@ near 1 and a low normalised entropy, whatever its proof count says. Read
 "succeeded" with care: auto and trivial succeed without changing anything.
 """
 import math
+import re
 from collections import Counter
 
 from . import record as rec
@@ -25,7 +26,9 @@ PRICES = {"claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_read": 0.20
 
 
 def head(tactic):
-    return tactic.strip().rstrip(".").split()[0] if tactic.strip() else ""
+    """The tactic's name: 'simpl; rewrite IHn.' -> 'simpl'."""
+    t = re.split(r"[\s;]", tactic.strip().rstrip("."), maxsplit=1)[0]
+    return t
 
 
 def distribution(tactics):

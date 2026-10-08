@@ -86,6 +86,8 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
     call and every step is written to the run record as it happens."""
     t0 = time.perf_counter()
     root = env.reset()
+    if hasattr(policy, "bind"):
+        policy.bind(env)
     tie = itertools.count()
     frontier = [(0.0, next(tie), root)]
     seen = {root.obs.key}

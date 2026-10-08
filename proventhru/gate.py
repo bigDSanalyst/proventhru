@@ -6,7 +6,8 @@ elaborates. So the gate sorts a candidate into one of:
   ill_formed  does not elaborate as a Prop
   refuted     its negation falls to a bounded attempt (a kernel-checked disproof)
   vacuous     its hypotheses are contradictory, so it says nothing
-  trivial     a one-line tactic proves it
+  trivial     a one-line tactic proves it, including citing a library lemma
+              (exact rev_involutive): the statement is already known
   open        formal, and survives all of the above: worth attacking
 
 Every attempt is bounded by Coq's Timeout, so `open` means "not settled by the
@@ -97,6 +98,12 @@ def classify(statement, preamble=DEFAULT_PREAMBLE, timeout=2, certify_disproof=T
         tac = _first_closing(pos, TRIVIAL, timeout)
         if tac:
             return GateResult("trivial", "closed by one tactic", (tac,))
+        g = pos.root_obs.goals[0] if pos.root_obs.goals else None
+        if g is not None:
+            from .retrieval import library_closers
+            tac = _first_closing(pos, library_closers(pos, g.conclusion, g.hypotheses), timeout)
+            if tac:
+                return GateResult("trivial", "already in the library: one lemma closes it", (tac,))
     finally:
         pos.close()
     return GateResult("open", "formal; not settled by the gate")
