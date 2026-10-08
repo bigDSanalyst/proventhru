@@ -169,6 +169,8 @@ class Episode:
                         "goals_after": st.signals.get("goals_after"),
                         "size_before": st.signals.get("size_before"),
                         "size_after": st.signals.get("size_after"),
+                        "hyps_before": st.signals.get("hyps_before"),
+                        "hyps_after": st.signals.get("hyps_after"),
                         "revisit": bool(st.signals.get("revisit")),
                         "observation": observation(st.node.obs if st.node else None)},
             "kernel": None if cert is None else {

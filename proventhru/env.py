@@ -177,12 +177,14 @@ class CoqEnv:
     def _signals(self, before, st):
         s = {"error": st.outcome == "error",
              "goals_before": len(before.goals) + before.shelved,
+             "hyps_before": sum(len(g.hypotheses) for g in before.goals),
              "size_before": before.size, "revisit": False, "finished": False,
              "kernel": None}
         if st.node is None:
             return s
         after = st.node.obs
         s.update(goals_after=len(after.goals) + after.shelved, size_after=after.size,
+                 hyps_after=sum(len(g.hypotheses) for g in after.goals),
                  revisit=after.key in self.seen, finished=after.finished)
         self.seen.add(after.key)
         if after.finished:
