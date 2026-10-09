@@ -99,6 +99,18 @@ How these goals are usually proved:
   that is not arithmetic, a rewrite that found no match. Change the idea, not
   the spelling.
 
+Arity, filled in. The tactics that act on something always name it:
+
+Goal: forall l1 l2 : list nat, rev (l1 ++ l2) = rev l2 ++ rev l1, after intros l1 l2
+  right: rewrite rev_app_distr.      wrong: rewrite.
+Goal: forall n : nat, n * n >= n
+  right: destruct n.                 wrong: destruct.
+  right: induction n.                wrong: induction.
+Goal: n <= m -> exists k, m = n + k, with H : n <= m
+  right: exists (m - n).             wrong: exists.
+Goal: m = n + (m - n), with H : n <= m
+  right: lia.                        wrong: lia H.
+
 Four examples of a good answer:
 
 State: {{"goals": [{{"type": "forall n : nat, n + 0 = n", "hypotheses": []}}], "path": [], "last_failure": null}}
@@ -125,11 +137,25 @@ USER = ("the proof state: view.state(obs, path, last_failure, tried) as "
 
 
 def schema_for(k):
-    """SCHEMA with exactly k candidates: constrained decoding (json_schema)
-    then cannot stop early, and the prompt asks for the same."""
-    s = json.loads(json.dumps(SCHEMA))
-    s["properties"]["candidates"].update(minItems=k, maxItems=k)
-    return s
+    """Exactly k candidates, and each one's argument shaped by its tactic's
+    arity, so constrained decoding (json_schema) cannot emit an arity error:
+    lia/reflexivity/... with an argument, or rewrite/destruct/... without
+    one. The tactic name was already an enum; this does the same for the
+    argument. (Under json_object the checks in assemble still apply.)"""
+    def branch(names, argument):
+        return {"type": "object",
+                "properties": {"tactic": {"type": "string", "enum": sorted(names)},
+                               "argument": argument},
+                "required": ["tactic", "argument"], "additionalProperties": False}
+
+    other = set(VOCABULARY) - NULLARY - NEEDS_ARGUMENT
+    item = {"anyOf": [branch(NULLARY, {"type": "string", "enum": [""]}),
+                      branch(NEEDS_ARGUMENT, {"type": "string", "minLength": 1}),
+                      branch(other, {"type": "string"})]}
+    return {"type": "object",
+            "properties": {"candidates": {"type": "array", "items": item,
+                                          "minItems": k, "maxItems": k}},
+            "required": ["candidates"], "additionalProperties": False}
 
 
 def prompt_sha256():

@@ -341,6 +341,28 @@ class TestReask(unittest.TestCase):
         self.assertEqual(res.expansions, 4)
 
 
+class TestAritySchema(unittest.TestCase):
+    def test_the_schema_partitions_the_vocabulary_and_forbids_arity_errors(self):
+        from proventhru.policy_openai import schema_for
+        from proventhru.policy_claude import VOCABULARY
+        s = schema_for(5)
+        branches = s["properties"]["candidates"]["items"]["anyOf"]
+        names = [n for b in branches for n in b["properties"]["tactic"]["enum"]]
+        self.assertEqual(sorted(names), sorted(VOCABULARY))
+        self.assertEqual(len(names), len(set(names)))
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        jsonschema.validate({"candidates": [{"tactic": "induction", "argument": "l"}] * 5}, s)
+        for bad in ({"tactic": "lia", "argument": "IHn"}, {"tactic": "destruct", "argument": ""},
+                    {"tactic": "omega", "argument": ""}):
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate({"candidates": [bad] * 5}, s)
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate({"candidates": [{"tactic": "lia", "argument": ""}] * 4}, s)
+
+
 class TestNullary(unittest.TestCase):
     def test_arguments_on_nullary_tactics_are_refused_before_a_step(self):
         from proventhru.policy_claude import assemble
