@@ -49,40 +49,81 @@ from .policy_claude import SCHEMA, VOCABULARY, assemble
 from .record import canon
 from .search import Policy
 
-PROMPT = """You choose the next tactic in an interactive Coq (Rocq) proof.
+PROMPT = """You choose the next tactic in an interactive Coq (Rocq) proof search.
 
 You are given the current proof state as JSON: every open goal with its
 hypotheses, the tactic path taken so far, and, when the last attempt failed,
 that tactic and Coq's exact error message. The first goal is the one the next
 tactic acts on.
 
-Propose up to {k} candidate tactics for the next step, best first. Each
-candidate is one tactic name from the allowed list, plus its argument:
+Propose exactly {k} distinct candidate tactics for the next step, best first.
+The search tries them in order and keeps every one that makes progress, so
+{k} genuinely different ideas are worth more than {k} variations of one.
+Each candidate is one tactic name from the allowed list, plus its argument:
 
 - the argument is whatever follows the name, without the final period:
   hypothesis or variable names from the state ("n", "H as [x Hx]"), a term
-  ("(S n)"), or a standard-library lemma name ("Nat.add_comm", "<- IHn",
-  "app_nil_r"); use "" when the tactic takes none.
+  ("(S n)"), or a standard-library lemma name ("Nat.add_comm", "<- IHn");
+  use "" when the tactic takes none.
 - one tactic per candidate: no ";", no "||", no "try", no second sentence.
-- candidates must differ from each other. Prefer a step that makes progress
-  on the first goal over one that only restates it.
 - if the last failure is shown, do not repeat that tactic at the same path;
   read Coq's message for why it failed.
+
+How these goals are usually proved:
+
+- A statement about a recursive function (length, rev, app, map, filter,
+  list_sum, Nat.add, Nat.mul, ...) of a variable usually needs `induction` on
+  that variable: on a list when the functions recurse on the list, on a nat
+  when they recurse on the number. Introduce the variables first if they are
+  still quantified (`intros`), then induct; include an induction among your
+  candidates whenever the goal mentions a recursive function of a variable.
+- In an inductive step, `simpl` unfolds the functions on the constructor, and
+  the induction hypothesis (IHl, IHn, ...) is then used with `rewrite` or
+  closes a goal with `lia` once the recursive parts are hypotheses.
+- `lia` closes linear arithmetic over nat, and treats `length l`, `list_sum
+  l`, ... as opaque numbers: it succeeds only once the needed facts about
+  them are in the hypotheses. `nia` handles products.
+- `reflexivity`, `auto`, `trivial` close goals that are equal after
+  computation; `simpl` alone does not close anything.
+- When a tactic just failed, Coq's message says why: an unknown name, a goal
+  that is not arithmetic, a rewrite that found no match. Change the idea, not
+  the spelling.
+
+Three examples of a good answer:
+
+State: {{"goals": [{{"type": "forall n : nat, n + 0 = n", "hypotheses": []}}], "path": [], "last_failure": null}}
+Answer: {{"candidates": [{{"tactic": "intros", "argument": "n"}}, {{"tactic": "induction", "argument": "n"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "auto", "argument": ""}}, {{"tactic": "intros", "argument": ""}}]}}
+
+State: {{"goals": [{{"type": "S n + 0 = S n", "hypotheses": [{{"name": "n", "type": "nat"}}, {{"name": "IHn", "type": "n + 0 = n"}}]}}], "path": ["intros n.", "induction n.", "reflexivity."], "last_failure": null}}
+Answer: {{"candidates": [{{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "IHn"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "f_equal", "argument": ""}}, {{"tactic": "congruence", "argument": ""}}]}}
+
+State: {{"goals": [{{"type": "length (rev l) <= length l", "hypotheses": [{{"name": "l", "type": "list nat"}}]}}], "path": ["intros l."], "last_failure": {{"tactic": "lia.", "outcome": "error", "error": "Tactic failure: Cannot find witness."}}}}
+Answer: {{"candidates": [{{"tactic": "induction", "argument": "l"}}, {{"tactic": "destruct", "argument": "l"}}, {{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "rev_length"}}, {{"tactic": "auto", "argument": ""}}]}}
 
 Allowed tactic names: {vocab}.
 
 The libraries loaded are given by the preamble: {preamble}
 
-Reply with one JSON object and nothing else, in exactly this form:
-{{"candidates": [{{"tactic": "induction", "argument": "l"}}, {{"tactic": "simpl", "argument": ""}}]}}"""
+Reply with one JSON object and nothing else, in the form of the answers above."""
 
 USER = "the proof state: view.state(obs, path, last_failure) as json.dumps(sort_keys=True)"
 
 
+def schema_for(k):
+    """SCHEMA with exactly k candidates: constrained decoding (json_schema)
+    then cannot stop early, and the prompt asks for the same."""
+    s = json.loads(json.dumps(SCHEMA))
+    s["properties"]["candidates"].update(minItems=k, maxItems=k)
+    return s
+
+
 def prompt_sha256():
-    """Everything that decides what the model is shown and asked for."""
+    """Everything that decides what the model is shown and asked for: the
+    template, the schema (and how k shapes it), the vocabulary, and the code
+    that renders the state."""
     return hashlib.sha256(canon({
-        "template": PROMPT, "user": USER, "schema": SCHEMA, "vocabulary": list(VOCABULARY),
+        "template": PROMPT, "user": USER, "schema": SCHEMA,
+        "schema_for": inspect.getsource(schema_for), "vocabulary": list(VOCABULARY),
         "view": inspect.getsource(view),
     }).encode()).hexdigest()
 
@@ -198,7 +239,7 @@ class OpenAICompatPolicy(Policy):
                 "max_tokens": self.max_tokens}
         if self.response_format == "json_schema":
             body["response_format"] = {"type": "json_schema", "json_schema": {
-                "name": "candidates", "schema": SCHEMA, "strict": True}}
+                "name": "candidates", "schema": schema_for(self.k), "strict": True}}
         elif self.response_format == "json_object":
             body["response_format"] = {"type": "json_object"}
         return body

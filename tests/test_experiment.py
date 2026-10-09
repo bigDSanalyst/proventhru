@@ -66,6 +66,8 @@ class TestOpenAICompat(unittest.TestCase):
         b = r["body"]
         self.assertEqual((b["model"], b["temperature"], b["seed"]), ("org/m:together", 0.0, 7))
         self.assertEqual(b["response_format"]["type"], "json_schema")
+        cands = b["response_format"]["json_schema"]["schema"]["properties"]["candidates"]
+        self.assertEqual((cands["minItems"], cands["maxItems"]), (5, 5))   # exactly k
         self.assertIn("Allowed tactic names: intros", b["messages"][0]["content"])
         state = json.loads(b["messages"][1]["content"])
         self.assertEqual(state["path"], ["intros n."])
