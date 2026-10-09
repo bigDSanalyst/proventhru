@@ -8,8 +8,8 @@ behind it. A change is an amendment: a new commit, logged at the bottom with
 its reason, so it has a new hash, and the records show which version each
 run was under.
 
-Stage: **v2, development** (v2 adds the limitations, the M1-first
-sequence, the choice of M1 and the Colab install rule). The sets, environment, conditions, budgets and
+Stage: **v3, development** (v2 added the limitations, the M1-first
+sequence and the Colab install rule; v3 moves M1 to 7B on an A100). The sets, environment, conditions, budgets and
 analysis are fixed. No prompt and no model are frozen yet, so model policies
 may run on the dev set only. The amendment that freezes the prompt and names
 the models opens the held-out sets to them.
@@ -87,6 +87,9 @@ The Colab run (the primary model) must install exactly Coq 8.18.0, and the
 fixed baselines are compared with model runs on that same prover version.
 The record's `environment.prover` is the evidence for this.
 
+**Everything runs in Colab**, the baseline reruns included, so every
+condition shares one machine image and one Coq build.
+
 **Colab install.** Colab's apt Coq is older than 8.18, so Coq 8.18.0 is
 installed with opam (about 15 to 20 minutes), and the opam switch is cached
 on Google Drive so later sessions reuse it. Using apt's Coq and noting the
@@ -136,22 +139,23 @@ run only if at least one of M1's primary comparisons is significant (below).
 Running M2 then costs no extra Colab and vLLM setup until there is something
 for it to check.
 
-- **M1: `Qwen/Qwen2.5-3B-Instruct`, pinned by revision hash, served by vLLM
-  in Colab, fp16, temperature 0.** M1 is the model that is fine-tuned
-  afterwards (DPO, then GRPO), so it is chosen as the model those can
-  actually run on: one free Colab T4 (16 GB, no bf16). A 3B model serves in
-  fp16 with room for the KV cache, and trains with LoRA in fp16 on that GPU.
-  A 7B model would need quantising to serve on a T4 (the fine-tuned and
-  served weights would then differ by a quantisation step), and GRPO on 7B
-  does not fit at all. The weights are pinned by the Hugging Face revision
-  (commit) hash, not by name. The baseline, the DPO model and the GRPO model
-  are the same weights at that revision, plus each stage's adapter, served
-  the same way. The freezing amendment records the revision hash and the
-  vLLM version, and `models` registers the served name
-  `Qwen/Qwen2.5-3B-Instruct@<revision>`. If a larger GPU becomes the
-  standing setup, a 7B M1 is a new amendment made before any held-out M1
-  run, never after one.
-- **M2 (if run): a second open-weight family, in Colab the same way.** At up
+- **M1: `Qwen/Qwen2.5-7B-Instruct`, pinned by revision hash, served by vLLM
+  in Colab on an A100, bf16, temperature 0.** M1 is the model that is
+  fine-tuned afterwards (DPO, then GRPO), so it is chosen as the model those
+  can run on with the hardware the whole line uses: a Colab A100 (bf16).
+  7B serves there in bf16 without quantisation, and trains with LoRA in bf16.
+  The weights are pinned by the Hugging Face revision (commit) hash, not by
+  name. The baseline, the DPO model and the GRPO model are the same weights
+  at that revision, plus each stage's adapter, served the same way: same
+  dtype, same vLLM version, same GPU class. The freezing amendment records
+  the revision hash, the vLLM version and the GPU, and `models` registers
+  the served name `Qwen/Qwen2.5-7B-Instruct@<revision>`.
+  **The A100 is part of the setup, not a convenience.** If a later stage
+  can't get an A100, it waits. It doesn't move to a smaller GPU or a
+  quantised copy, because that would make it a different model from the
+  baseline.
+- **M2 (if run): a second open-weight family, in Colab the same way (A100,
+  bf16).** At up
   to about 12,000 calls (about 14M tokens) per low-budget run on `test`, the
   HF router's free allowance can't carry a held-out run. The router is used
   for prompt tuning on `dev` only.
@@ -302,4 +306,5 @@ Checked by `protocol.check()` on every run.
 | version | commit | change | why |
 |---|---|---|---|
 | v1 | `1e6b8ef` | first registration: sets, environment, conditions, budgets, analysis. No prompt or model frozen | |
-| v2 | (this commit) | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
+| v2 | `53fcdde` | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
+| v3 | (this commit) | M1 = Qwen2.5-7B-Instruct, bf16, on a Colab A100 (was 3B fp16 on a T4); the A100 is fixed for baseline, DPO and GRPO; everything, baselines included, runs in Colab. Frozen block unchanged | An A100 is available: 7B then serves and trains without quantisation, which was the only reason for 3B. Made before any M1 call, as v2 requires |
