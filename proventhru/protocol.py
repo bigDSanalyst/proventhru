@@ -10,7 +10,8 @@ PROTOCOL.md is prose for people plus one fenced block for this module:
      "policies": ["fixed-tactics/v1", ...],
      "prompts": ["<sha256>", ...],
      "models": ["Qwen/...", ...],
-     "k": 5, "retrieval_top": 6}
+     "k": 5, "retrieval_top": 6,
+     "model_settings": {"reexpand": 3, "temperature": 0.0, ...}}
     ```
 
 load() refuses a protocol file that is not committed, or that differs from
@@ -113,6 +114,10 @@ def check(protocol, preamble, statements, policy, environment, search):
                 raise ProtocolError(f"model {policy.get('model')!r} is not registered")
             if f.get("k") is not None and policy.get("k") != f["k"]:
                 raise ProtocolError(f"k={policy.get('k')}; the protocol registers k={f['k']}")
+            for key, want in (f.get("model_settings") or {}).items():
+                if policy.get(key) != want:
+                    raise ProtocolError(f"{key}={policy.get(key)!r}; the protocol registers "
+                                        f"{want!r}")
         top = (policy or {}).get("retrieval", {}).get("top")
         if top is not None and f.get("retrieval_top") is not None and top != f["retrieval_top"]:
             raise ProtocolError(f"retrieval top={top}; the protocol registers {f['retrieval_top']}")

@@ -45,7 +45,7 @@ import urllib.error
 import urllib.request
 
 from . import view
-from .policy_claude import NULLARY, SCHEMA, VOCABULARY, assemble
+from .policy_claude import NEEDS_ARGUMENT, NULLARY, SCHEMA, VOCABULARY, assemble
 from .record import canon
 from .search import Policy
 
@@ -71,8 +71,13 @@ Each candidate is one tactic name from the allowed list, plus its argument:
 - `tried_here` lists the tactics already tried at this exact state and what
   came of each. When it is not empty, every candidate must be a tactic not
   in it: new ideas, not repeats.
-- lia, nia, reflexivity, assumption, trivial, congruence, split, f_equal,
-  left and right take no argument here: give "".
+- Arity. lia, nia, reflexivity, assumption, trivial, congruence, split,
+  f_equal, left and right take no argument: give "". They read the goal and
+  every hypothesis by themselves, so `lia` already uses IHn; never write
+  "lia IHn" or "assumption H". rewrite, apply, exact, unfold, induction,
+  destruct and exists always need one: the hypothesis, lemma, variable or
+  term they act on. intros, simpl and auto work either way (intros "" or
+  intros "n"; simpl "" or simpl "in IHn").
 
 How these goals are usually proved:
 
@@ -94,7 +99,7 @@ How these goals are usually proved:
   that is not arithmetic, a rewrite that found no match. Change the idea, not
   the spelling.
 
-Three examples of a good answer:
+Four examples of a good answer:
 
 State: {{"goals": [{{"type": "forall n : nat, n + 0 = n", "hypotheses": []}}], "path": [], "last_failure": null}}
 Answer: {{"candidates": [{{"tactic": "intros", "argument": "n"}}, {{"tactic": "induction", "argument": "n"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "auto", "argument": ""}}, {{"tactic": "intros", "argument": ""}}]}}
@@ -104,6 +109,10 @@ Answer: {{"candidates": [{{"tactic": "simpl", "argument": ""}}, {{"tactic": "rew
 
 State: {{"goals": [{{"type": "length (rev l) <= length l", "hypotheses": [{{"name": "l", "type": "list nat"}}]}}], "path": ["intros l."], "last_failure": {{"tactic": "lia.", "outcome": "error", "error": "Tactic failure: Cannot find witness."}}}}
 Answer: {{"candidates": [{{"tactic": "induction", "argument": "l"}}, {{"tactic": "destruct", "argument": "l"}}, {{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "rev_length"}}, {{"tactic": "auto", "argument": ""}}]}}
+
+State: {{"goals": [{{"type": "length ((a0 :: l) ++ [a]) = S (length (a0 :: l))", "hypotheses": [{{"name": "a", "type": "nat"}}, {{"name": "a0", "type": "nat"}}, {{"name": "l", "type": "list nat"}}, {{"name": "IHl", "type": "length (l ++ [a]) = S (length l)"}}]}}], "path": ["intros a l.", "induction l.", "reflexivity."], "last_failure": null}}
+Answer: {{"candidates": [{{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "IHl"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "simpl", "argument": "in IHl"}}, {{"tactic": "auto", "argument": ""}}]}}
+(lia with "" uses IHl by itself; rewrite names IHl because it must; simpl appears twice, once on the goal and once on a hypothesis.)
 
 Allowed tactic names: {vocab}.
 
@@ -130,7 +139,7 @@ def prompt_sha256():
     return hashlib.sha256(canon({
         "template": PROMPT, "user": USER, "schema": SCHEMA,
         "schema_for": inspect.getsource(schema_for), "vocabulary": list(VOCABULARY),
-        "nullary": sorted(NULLARY),
+        "nullary": sorted(NULLARY), "needs_argument": sorted(NEEDS_ARGUMENT),
         "view": inspect.getsource(view),
     }).encode()).hexdigest()
 

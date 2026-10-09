@@ -252,6 +252,14 @@ class TestProtocol(unittest.TestCase):
                 check(p2, PRE, self.STMTS, dict(model, k=8), self.ENV, search)
             with self.assertRaisesRegex(ProtocolError, "prompt"):
                 check(p2, PRE, self.STMTS, dict(model, prompt_sha256="0" * 64), self.ENV, search)
+            write_protocol(d, self.frozen(prompts=[prompt_sha256()],
+                                          model_settings={"reexpand": 3, "temperature": 0.0}))
+            commit(d)
+            p3 = load(path)
+            ok = dict(model, reexpand=3, temperature=0.0)
+            self.assertEqual(check(p3, PRE, self.STMTS, ok, self.ENV, search)["set"], "test")
+            with self.assertRaisesRegex(ProtocolError, "reexpand"):
+                check(p3, PRE, self.STMTS, dict(ok, reexpand=7), self.ENV, search)
 
 
 @unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
@@ -340,6 +348,10 @@ class TestNullary(unittest.TestCase):
         self.assertIsNone(assemble("reflexivity", "H")[0])
         self.assertEqual(assemble("lia", "")[0], "lia.")
         self.assertEqual(assemble("induction", "n")[0], "induction n.")
+        self.assertIsNone(assemble("rewrite", "")[0])
+        self.assertIsNone(assemble("induction", " ")[0])
+        self.assertEqual(assemble("intros", "")[0], "intros.")
+        self.assertEqual(assemble("simpl", "in IHl")[0], "simpl in IHl.")
 
 
 class Unavailable(RuntimeError):

@@ -85,6 +85,10 @@ SCHEMA = {
 NULLARY = {"lia", "nia", "reflexivity", "assumption", "trivial", "congruence", "split",
            "f_equal", "left", "right"}
 
+# Tactics that act on something named: without an argument they are a sure
+# error here (`rewrite.`, `apply.`), refused before they cost a step.
+NEEDS_ARGUMENT = {"rewrite", "apply", "exact", "unfold", "induction", "destruct", "exists"}
+
 # What an argument may not contain: a tactical, a comment, or a second sentence.
 BAD_ARGUMENT = re.compile(r";|\|\||\(\*|\.\s|\.$|\n|\btry\b|\brepeat\b|\bdo\b")
 
@@ -104,6 +108,8 @@ def assemble(tactic, argument):
     arg = (argument or "").strip()
     if arg and tactic in NULLARY:
         return None, f"{tactic} takes no argument (got {arg!r})"
+    if not arg and tactic in NEEDS_ARGUMENT:
+        return None, f"{tactic} needs an argument"
     if BAD_ARGUMENT.search(arg):
         return None, f"argument {arg!r} is more than one tactic's argument"
     return (f"{tactic} {arg}".strip() + "."), None
