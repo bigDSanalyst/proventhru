@@ -15,20 +15,21 @@ seed 0, k = 5, `json_schema` output. Runs cite protocol v3
 
 ## The final round (the frozen prompt)
 
-Prompt `9d5a3e605ff9aad1d3e617be732b41476297171266f10aab77b400fc0b8e3508`
-(commit `bba038f`), re-asking up to 3 times per state.
+Prompt `e26d4a7732dc48875af2cd566141a41ae7a939bb66ffd0bb0d794caba54f1ee4`
+(commit `3c60b52`), re-asking up to 3 times per state, arity enforced by
+the output schema.
 
 | dev, 600 steps | without retrieval | with retrieval |
 |---|---|---|
 | fixed tactics | **A = 10** / 29 | **B = 15** / 29 |
-| M1 | **C = 8** / 29 | **D = 12** / 29 |
+| M1 | **C = 7** / 29 | **D = 12** / 29 |
 
 | run | proved | ended: proved / step budget / frontier | steps | invocations | candidates per call | invalid candidates | record head |
 |---|---|---|---|---|---|---|---|
 | A | 10 | 10 / 16 / 3 | 11,406 | 618 | 18.99 | – | 12,082 `f5f5d6c9…31fb` |
 | B | 15 | 15 / 12 / 2 | 10,925 | 374 | 30.82 | – | 11,357 `e07b1916…f354` |
-| C | 8 | 8 / 0 / 21 | 2,042 | 964 | 3.49 | 1,455 | 3,064 `947da863…5197` |
-| D | 12 | 12 / 10 / 7 | 8,604 | 833 | 18.06 | 893 | 9,495 `8c1ae289…7137` |
+| C | 7 | 7 / 4 / 18 | 4,315 | 1,580 | 4.94 | 90 | 5,953 `2b2517f1…0fc2e` |
+| D | 12 | 12 / 10 / 7 | 9,944 | 974 | 17.58 | 60 | 10,976 `5cfffa3e…1dfb` |
 
 A and B were run in this repository's container; C and D in Colab. Their
 records are in the Drive folder `proventhru/runs/`.
@@ -40,19 +41,25 @@ records are in the Drive folder `proventhru/runs/`.
 | 1 | `c9ce1aa0…` | first prompt, "up to k" candidates | 0 / 29 | – | 29 of 29 (126 steps in all) | not kept |
 | 2 | `63ca6854…` | exactly k, worked examples | 4 / 29 | – | 25 of 25 unproved (792 steps) | not kept |
 | 3 | `2c274554…` | re-asking with `tried_here`; nullary arguments refused | 7 / 29 | 10 / 29 | 20 of 22 unproved (4,106 steps) | C 5,570 `a5ca750c…328f`, D 10,672 `ba3e25fd…d564` |
-| 4 | `9d5a3e60…` | arity rules and a fourth example; empty arguments refused | 8 / 29 | 12 / 29 | 21 of 21 unproved (2,042 steps) | above |
+| 4 | `9d5a3e60…` | arity rules and a fourth example; empty arguments refused | 8 / 29 | 12 / 29 | 21 of 21 unproved (2,042 steps); 1,455 invalid candidates | C 3,064 `947da863…5197`, D 9,495 `8c1ae289…7137` |
+| 5 | `e26d4a77…` | arity enforced by the output schema; filled right/wrong examples | 7 / 29 | 12 / 29 | 18 of 22 unproved (4,315 steps); 90 invalid | above |
 
 ## What the rounds show
 
-**The model's search starves.** In every round, nearly all of C's unproved searches end by
-running out of candidates, not by reaching the step budget. Round 4's arity
-check moved empty-argument candidates (1,276 of the 1,455 invalid: bare
-`destruct` 395, `rewrite` 394, `induction` 265, `unfold` 87, `apply` 73,
-`exists` 62) from wasted Coq steps to rejected candidates.
-That raised proofs slightly (7 to 8) and cut steps used further (4,106 to
-2,042 of 17,400). C uses about 12% of the effort it is compared at. Read
-any C result as the result of a policy that cannot use its budget, not of
-one that used it and lost.
+**Formatting is not what limits the model.** Round 4 found arity errors in
+about 30% of what the model emitted (1,455 of ~4,800 candidates; 1,276
+were an argument-taking tactic with no argument). Round 5 put arity into the
+output schema, so under constrained decoding the error cannot be emitted:
+invalid candidates fell to 90. C did not improve (8 to 7), D stayed at 12.
+About 85% of C's well-formed tactics still fail in Coq or return to a seen
+state (3,687 of 4,315). Where an argument is required, the model often
+supplies the nearest variable (`rewrite n`, `unfold n`, `discriminate n`):
+well-formed, and wrong about what the tactic acts on.
+
+**The model's search starves.** In every round, most of C's unproved searches
+end by running out of candidates, not at the step budget: 18 of 22 in round
+5, which used 4,315 of 17,400 steps (25%). Read a C result as the result of
+a policy that cannot use its budget, not of one that used it and lost.
 
 **D replaces the fixed list rather than adding to it.** D is retrieval
 wrapped around the model; B is retrieval wrapped around the fixed tactics.
@@ -62,9 +69,10 @@ anything *to* the fixed list is a different condition (fixed + retrieval +
 model, the model's candidates appended). It is not part of the frozen
 protocol and comes after the test runs, by its own amendment.
 
-**The DPO starting point.** C proves 8 of 29 on dev. That is worse than the
+**The DPO starting point.** C proves 7 of 29 on dev. That is worse than the
 fixed list, but not zero, and preference optimisation needs a policy that
 already finds some proofs.
 
 **About 85–90% of the model's own tactics are unproductive** (an error, a
-timeout, or a return to a state already seen) in every round with re-asking.
+timeout, or a return to a state already seen) in every round with
+re-asking, rounds 4 and 5 included.
