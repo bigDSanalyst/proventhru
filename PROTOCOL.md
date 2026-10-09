@@ -8,11 +8,12 @@ behind it. A change is an amendment: a new commit, logged at the bottom with
 its reason, so it has a new hash, and the records show which version each
 run was under.
 
-Stage: **v3, development** (v2 added the limitations, the M1-first
-sequence and the Colab install rule; v3 moves M1 to 7B on an A100). The sets, environment, conditions, budgets and
-analysis are fixed. No prompt and no model are frozen yet, so model policies
-may run on the dev set only. The amendment that freezes the prompt and names
-the models opens the held-out sets to them.
+Stage: **v4, frozen.** The prompt, the model, its serving and its settings
+are registered (v2 added the limitations, the M1-first sequence and the
+Colab install rule; v3 moved M1 to 7B on an A100; v4 freezes). Held-out runs
+of M1 may now start. Nothing in this protocol changes again before they are
+reported, except by an amendment that says why and repeats the runs it
+affects.
 
 ## Questions
 
@@ -210,6 +211,18 @@ model's.
 
 **Secondary** (reported, not tested for significance unless stated):
 
+- **retrieval-solved vs retrieval-unsolved.** A `test` statement is
+  retrieval-solved if B proves it at the same step budget in the rerun under
+  this version. C and D are reported within each half, with A and B, so it
+  shows whether the model adds anything where lemma lookup already works and
+  where it doesn't.
+- **budget used.** For each condition: steps used out of steps allowed, and
+  how many searches ended at the step budget, by running out of candidates
+  (frontier), or by a proof. On dev, M1 without retrieval used about 12% of
+  its budget and ended by frontier in 21 of 21 unproved searches
+  (`results/dev-conditions-600steps.md`). A comparison where one side
+  cannot use the effort it is matched on is reported as that, not as a
+  plain loss.
 - M1's two comparisons at the high step budget
 - Q3: C on `test` vs C on `test_renamed`, by item, McNemar, per model run
 - invocations per proof and per statement
@@ -228,6 +241,33 @@ model's.
 budgets) after looking at held-out results. Any such change is a new
 amendment, and the held-out runs are repeated under it. Results under the
 earlier version are still reported.
+
+## The frozen policy (v4)
+
+Tuned on `dev` only, over four rounds recorded in
+`results/dev-conditions-600steps.md` (sha256 `20f9a301a3dc75130057bea148b2005e0557a22f659079eb93e4b5926b2d1f30`).
+Final dev numbers at 600 steps: A 10, B 15, C 8, D 12 of 29. The prompt was
+frozen after the fourth round, as the stopping rule required, without
+regard to those numbers.
+
+- Prompt `9d5a3e605ff9aad1d3e617be732b41476297171266f10aab77b400fc0b8e3508`,
+  the code of commit `bba038f` (`policy_openai.PROMPT`, `schema_for`,
+  `view.state`, the vocabulary and the arity rules).
+- Model `Qwen/Qwen2.5-7B-Instruct` at revision
+  `a09a35458c702b33eeacc393d103063234e8bc28`, served by vLLM 0.31.0 in
+  bf16 on an NVIDIA A100-SXM4-40GB, under the served name in `models`.
+- Settings, checked on every held-out run (`model_settings`): k = 5, up to
+  3 re-asks per state shown what was tried there, `json_schema` output,
+  temperature 0, seed 0, at most 400 output tokens.
+- Search: best-first with re-asking for policies that set `reexpand`
+  (`search.best_first`). The fixed policies don't re-ask, and their search
+  is unchanged from v1: the dev baseline reproduces exactly.
+
+**C and D replace the fixed list; they don't add to it.** D is retrieval
+around the model, as B is retrieval around the fixed tactics. Whether the
+model adds anything to the fixed list (fixed + retrieval + model) is a
+different question. It is asked after these runs are reported, by its own
+amendment.
 
 ## Limitations
 
@@ -294,10 +334,21 @@ Checked by `protocol.check()` on every run.
   "openai-compat/v1",
   "retrieval/v1+openai-compat/v1"
  ],
- "prompts": [],
- "models": [],
+ "prompts": [
+  "9d5a3e605ff9aad1d3e617be732b41476297171266f10aab77b400fc0b8e3508"
+ ],
+ "models": [
+  "Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28"
+ ],
  "k": 5,
- "retrieval_top": 6
+ "retrieval_top": 6,
+ "model_settings": {
+  "reexpand": 3,
+  "response_format": "json_schema",
+  "temperature": 0.0,
+  "seed": 0,
+  "max_tokens": 400
+ }
 }
 ```
 
@@ -307,4 +358,5 @@ Checked by `protocol.check()` on every run.
 |---|---|---|---|
 | v1 | `1e6b8ef` | first registration: sets, environment, conditions, budgets, analysis. No prompt or model frozen | |
 | v2 | `53fcdde` | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
-| v3 | (this commit) | M1 = Qwen2.5-7B-Instruct, bf16, on a Colab A100 (was 3B fp16 on a T4); the A100 is fixed for baseline, DPO and GRPO; everything, baselines included, runs in Colab. Frozen block unchanged | An A100 is available: 7B then serves and trains without quantisation, which was the only reason for 3B. Made before any M1 call, as v2 requires |
+| v3 | `b18a0ad` | M1 = Qwen2.5-7B-Instruct, bf16, on a Colab A100 (was 3B fp16 on a T4); the A100 is fixed for baseline, DPO and GRPO; everything, baselines included, runs in Colab. Frozen block unchanged | An A100 is available: 7B then serves and trains without quantisation, which was the only reason for 3B. Made before any M1 call, as v2 requires |
+| v4 | (this commit) | **Freeze.** Registers the prompt (`9d5a3e60…`), M1 at revision `a09a3545…` served by vLLM 0.31.0 bf16 on an A100-SXM4-40GB, and `model_settings` (reexpand 3, json_schema, temperature 0, seed 0, max 400 tokens); search re-asks for model policies; secondary analyses: retrieval-solved split, budget used. Cites `results/dev-conditions-600steps.md` | The stopping rule: one hygiene round after the re-asking change, then freeze whatever the dev numbers, so the test result cannot have been tuned toward |
