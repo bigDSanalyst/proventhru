@@ -45,7 +45,7 @@ import urllib.error
 import urllib.request
 
 from . import view
-from .policy_claude import SCHEMA, VOCABULARY, assemble
+from .policy_claude import NULLARY, SCHEMA, VOCABULARY, assemble
 from .record import canon
 from .search import Policy
 
@@ -68,6 +68,11 @@ Each candidate is one tactic name from the allowed list, plus its argument:
 - one tactic per candidate: no ";", no "||", no "try", no second sentence.
 - if the last failure is shown, do not repeat that tactic at the same path;
   read Coq's message for why it failed.
+- `tried_here` lists the tactics already tried at this exact state and what
+  came of each. When it is not empty, every candidate must be a tactic not
+  in it: new ideas, not repeats.
+- lia, nia, reflexivity, assumption, trivial, congruence, split, f_equal,
+  left and right take no argument here: give "".
 
 How these goals are usually proved:
 
@@ -106,7 +111,8 @@ The libraries loaded are given by the preamble: {preamble}
 
 Reply with one JSON object and nothing else, in the form of the answers above."""
 
-USER = "the proof state: view.state(obs, path, last_failure) as json.dumps(sort_keys=True)"
+USER = ("the proof state: view.state(obs, path, last_failure, tried) as "
+        "json.dumps(sort_keys=True)")
 
 
 def schema_for(k):
@@ -124,6 +130,7 @@ def prompt_sha256():
     return hashlib.sha256(canon({
         "template": PROMPT, "user": USER, "schema": SCHEMA,
         "schema_for": inspect.getsource(schema_for), "vocabulary": list(VOCABULARY),
+        "nullary": sorted(NULLARY),
         "view": inspect.getsource(view),
     }).encode()).hexdigest()
 
@@ -213,7 +220,7 @@ class OpenAICompatPolicy(Policy):
     def __init__(self, preamble, model, base_url, key_env="HF_TOKEN", k=5, temperature=0.0,
                  seed=0, max_tokens=400, response_format="json_object", cache=None,
                  transport=None, retries=6, backoff=2.0, max_backoff=60.0, timeout=120,
-                 max_calls=None, sleep=time.sleep, provider=None):
+                 max_calls=None, sleep=time.sleep, provider=None, reexpand=3):
         self.model, self.base_url = model, base_url.rstrip("/")
         self.key_env, self.k = key_env, k
         self.temperature, self.seed, self.max_tokens = temperature, seed, max_tokens
@@ -222,12 +229,14 @@ class OpenAICompatPolicy(Policy):
         self.transport = transport or HTTPTransport()
         self.retries, self.backoff, self.max_backoff = retries, backoff, max_backoff
         self.timeout, self.max_calls, self.calls, self.sleep = timeout, max_calls, 0, sleep
+        self.reexpand = reexpand
         self.system = PROMPT.format(k=k, vocab=", ".join(VOCABULARY),
                                     preamble=preamble.strip() or "(none)")
         self.identity = {"id": "openai-compat/v1", "model": model,
                          "provider": provider or self.base_url, "base_url": self.base_url,
                          "k": k, "temperature": temperature, "seed": seed,
                          "max_tokens": max_tokens, "response_format": response_format,
+                         "reexpand": reexpand,
                          "prompt_sha256": prompt_sha256(), "vocabulary": list(VOCABULARY)}
         self.last_cost = None
 
@@ -284,12 +293,12 @@ class OpenAICompatPolicy(Policy):
         raise ModelUnavailable(f"{self.model} at {self.base_url}: status {status} after "
                                f"{cost['retries']} retries", cost)
 
-    def propose(self, obs, path, last_failure=None):
+    def propose(self, obs, path, last_failure=None, tried=None):
         if self.max_calls is not None and self.calls >= self.max_calls:
             self.last_cost = {"model": self.model, "skipped": "max_calls reached"}
             return []
         self.calls += 1
-        state = view.state(obs, path, last_failure)
+        state = view.state(obs, path, last_failure, tried)
         cost = {"model": self.model, "served_model": None, "served_provider": None,
                 "input_tokens": 0, "output_tokens": 0, "model_ms": None,
                 "stop_reason": None, "request_id": None, "dropped": [], "failure": None,

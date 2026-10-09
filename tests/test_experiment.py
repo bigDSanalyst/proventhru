@@ -278,6 +278,70 @@ class TestStepBudget(unittest.TestCase):
         self.assertEqual(res.expansions, 2)            # 4 + 3 tactics: the cap fell mid-node
 
 
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestReask(unittest.TestCase):
+    def test_a_node_is_reasked_with_what_was_tried_and_repeats_cost_nothing(self):
+        from proventhru.env import CoqEnv
+        from proventhru.search import best_first, Policy
+
+        class Narrow(Policy):
+            """Two ideas per ask, repeating one of the old ones on a re-ask."""
+            identity = {"id": "narrow", "model": None, "provider": None}
+            reexpand = 2
+
+            def __init__(self):
+                self.asks = []
+
+            def propose(self, obs, path, last_failure=None, tried=None):
+                self.asks.append((tuple(path), [t["tactic"] for t in tried or []]))
+                if not path and tried is None:
+                    return [("exact I.", 1.0), ("intros n.", 0.9)]
+                if not path:
+                    return [("exact I.", 1.0), ("simpl.", 0.9)]  # exact I. again: no step
+                return [("exact I.", 1.0)]                       # children get nowhere
+
+        pol = Narrow()
+        with CoqEnv("forall n : nat, n * n >= n", PRE, backend="coqtop") as env:
+            res = best_first(env, pol, budget=None, step_budget=50)
+        root_asks = [t for p, t in pol.asks if p == ()]
+        self.assertEqual(root_asks[0], [])                       # first ask: nothing tried
+        self.assertEqual(root_asks[1], ["exact I.", "intros n."])  # re-ask: what was tried
+        root_steps = [s.tactic for s in res.steps if s.parent == ()]
+        self.assertEqual(root_steps, ["exact I.", "intros n.", "simpl."])  # repeat skipped
+        self.assertEqual(len(root_asks), 3)                      # 1 + reexpand, then no news
+
+    def test_reasks_stop_after_reexpand_and_count_as_invocations(self):
+        from proventhru.env import CoqEnv
+        from proventhru.search import best_first, Policy
+
+        class Stuck(Policy):
+            identity = {"id": "stuck", "model": None, "provider": None}
+            reexpand = 3
+
+            def __init__(self):
+                self.n = 0
+
+            def propose(self, obs, path, last_failure=None, tried=None):
+                self.n += 1
+                return [(f"exact I{self.n}.", 1.0)] if not path else []
+
+        pol = Stuck()
+        with CoqEnv("forall n : nat, n * n >= n", PRE, backend="coqtop") as env:
+            res = best_first(env, pol, budget=None, step_budget=50)
+        self.assertEqual(res.stopped, "frontier")
+        self.assertEqual(pol.n, 4)                               # 1 ask + 3 re-asks
+        self.assertEqual(res.expansions, 4)
+
+
+class TestNullary(unittest.TestCase):
+    def test_arguments_on_nullary_tactics_are_refused_before_a_step(self):
+        from proventhru.policy_claude import assemble
+        self.assertIsNone(assemble("lia", "n * n - n")[0])
+        self.assertIsNone(assemble("reflexivity", "H")[0])
+        self.assertEqual(assemble("lia", "")[0], "lia.")
+        self.assertEqual(assemble("induction", "n")[0], "induction n.")
+
+
 class Unavailable(RuntimeError):
     unavailable = True
 

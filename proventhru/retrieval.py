@@ -143,8 +143,13 @@ class RetrievalPolicy(Policy):
         if hasattr(self.base, "bind"):
             self.base.bind(env)
 
-    def propose(self, obs, path, last_failure=None):
-        out = list(self.base.propose(obs, path, last_failure))
+    @property
+    def reexpand(self):
+        return getattr(self.base, "reexpand", 0)
+
+    def propose(self, obs, path, last_failure=None, tried=None):
+        out = list(self.base.propose(obs, path, last_failure, tried=tried) if tried is not None
+                   else self.base.propose(obs, path, last_failure))
         ms0 = self.retriever.ms
         lemmas = []
         if obs.goals and self.env is not None and self.env.session is not None:
