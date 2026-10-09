@@ -8,10 +8,11 @@ behind it. A change is an amendment: a new commit, logged at the bottom with
 its reason, so it has a new hash, and the records show which version each
 run was under.
 
-Stage: **v4, frozen.** The prompt, the model, its serving and its settings
+Stage: **v5, frozen.** The prompt, the model, its serving and its settings
 are registered (v2 added the limitations, the M1-first sequence and the
-Colab install rule; v3 moved M1 to 7B on an A100; v4 freezes). Held-out runs
-of M1 may now start. Nothing in this protocol changes again before they are
+Colab install rule; v3 moved M1 to 7B on an A100; v4 froze; v5 replaced
+v4's prompt before any held-out model run, see Amendments). Held-out runs of
+M1 may now start. Nothing in this protocol changes again before they are
 reported, except by an amendment that says why and repeats the runs it
 affects.
 
@@ -242,17 +243,17 @@ budgets) after looking at held-out results. Any such change is a new
 amendment, and the held-out runs are repeated under it. Results under the
 earlier version are still reported.
 
-## The frozen policy (v4)
+## The frozen policy (v5)
 
-Tuned on `dev` only, over four rounds recorded in
-`results/dev-conditions-600steps.md` (sha256 `20f9a301a3dc75130057bea148b2005e0557a22f659079eb93e4b5926b2d1f30`).
-Final dev numbers at 600 steps: A 10, B 15, C 8, D 12 of 29. The prompt was
-frozen after the fourth round, as the stopping rule required, without
-regard to those numbers.
+Tuned on `dev` only, over five rounds recorded in
+`results/dev-conditions-600steps.md` (sha256 `0a75506889a4afff6c0b121b0667e94949235349274840344be9350f1ab9e5e3`).
+Final dev numbers at 600 steps: A 10, B 15, C 7, D 12 of 29. The fifth
+round was the last, as agreed before it ran, and the prompt was frozen
+without regard to its numbers.
 
-- Prompt `9d5a3e605ff9aad1d3e617be732b41476297171266f10aab77b400fc0b8e3508`,
-  the code of commit `bba038f` (`policy_openai.PROMPT`, `schema_for`,
-  `view.state`, the vocabulary and the arity rules).
+- Prompt `e26d4a7732dc48875af2cd566141a41ae7a939bb66ffd0bb0d794caba54f1ee4`,
+  the code of commit `3c60b52` (`policy_openai.PROMPT`, `schema_for` with
+  arity per tactic, `view.state`, the vocabulary and the arity rules).
 - Model `Qwen/Qwen2.5-7B-Instruct` at revision
   `a09a35458c702b33eeacc393d103063234e8bc28`, served by vLLM 0.31.0 in
   bf16 on an NVIDIA A100-SXM4-40GB, under the served name in `models`.
@@ -335,7 +336,7 @@ Checked by `protocol.check()` on every run.
   "retrieval/v1+openai-compat/v1"
  ],
  "prompts": [
-  "9d5a3e605ff9aad1d3e617be732b41476297171266f10aab77b400fc0b8e3508"
+  "e26d4a7732dc48875af2cd566141a41ae7a939bb66ffd0bb0d794caba54f1ee4"
  ],
  "models": [
   "Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28"
@@ -359,4 +360,5 @@ Checked by `protocol.check()` on every run.
 | v1 | `1e6b8ef` | first registration: sets, environment, conditions, budgets, analysis. No prompt or model frozen | |
 | v2 | `53fcdde` | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
 | v3 | `b18a0ad` | M1 = Qwen2.5-7B-Instruct, bf16, on a Colab A100 (was 3B fp16 on a T4); the A100 is fixed for baseline, DPO and GRPO; everything, baselines included, runs in Colab. Frozen block unchanged | An A100 is available: 7B then serves and trains without quantisation, which was the only reason for 3B. Made before any M1 call, as v2 requires |
-| v4 | (this commit) | **Freeze.** Registers the prompt (`9d5a3e60…`), M1 at revision `a09a3545…` served by vLLM 0.31.0 bf16 on an A100-SXM4-40GB, and `model_settings` (reexpand 3, json_schema, temperature 0, seed 0, max 400 tokens); search re-asks for model policies; secondary analyses: retrieval-solved split, budget used. Cites `results/dev-conditions-600steps.md` | The stopping rule: one hygiene round after the re-asking change, then freeze whatever the dev numbers, so the test result cannot have been tuned toward |
+| v4 | `2140c7c` | **Freeze** (superseded by v5 before any held-out model run). Registers the prompt (`9d5a3e60…`), M1 at revision `a09a3545…` served by vLLM 0.31.0 bf16 on an A100-SXM4-40GB, and `model_settings` (reexpand 3, json_schema, temperature 0, seed 0, max 400 tokens); search re-asks for model policies; secondary analyses: retrieval-solved split, budget used. Cites `results/dev-conditions-600steps.md` | The stopping rule: one hygiene round after the re-asking change, then freeze whatever the dev numbers, so the test result cannot have been tuned toward |
+| v5 | (this commit) | **Freeze, replacing v4's prompt** with `e26d4a77…`: hygiene round 2, arity in the output schema (an argument is `""` for lia, reflexivity, ...; non-empty for rewrite, destruct, induction, ...) plus filled right/wrong examples. Everything else as v4. Cites the dev file with round 5 | After v4 froze, round 4's drop list showed arity errors in ~30% of the model's output (1,276 empty arguments of 1,455 invalid), which would have mixed a formatting bug into a capability comparison. Checked before amending: no model run on `test` or `test_renamed` existed (Colab `runs/` listing). Agreed in advance as the last round; frozen whatever it showed (C 8 to 7, D 12 to 12, invalid 1,455 to 90) |
