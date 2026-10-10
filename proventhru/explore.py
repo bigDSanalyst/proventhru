@@ -7,9 +7,11 @@ Theory exploration over the stdlib nat and list nat signature, in rounds:
   1. generate  the next per_round candidates from conjecture.py, smallest
                first: small laws are proved first and are the lemmas the
                bigger ones need.
-  2. test      each candidate on 2,000 fresh random inputs and 1,000 wide
-               ones (values to 100, lists to 12: small values let false
-               bounds through),
+  2. test      each candidate on 2,000 fresh random inputs, 1,000 wide ones
+               (values to 100, lists to 12: small values let false bounds
+               through), and every list of length at most 5 over {0, 1, 2}
+               (random inputs rarely hold four zeros); each small-list drop
+               is recorded with its counterexample in round-N/refuted.jsonl,
                and drop instances of laws over nat alone: with every
                list-derived number replaced by a free one, 0 * list_sum l = 0
                is still true, so it says nothing about lists.
@@ -59,7 +61,7 @@ from collections import Counter
 from . import record as rec
 from .conjecture import (ALL_OPS, EDGE, L, N, OPS, VARS, WIDE, ops_used, anti_unify, canonical_names, candidates,
                          constant_list, enumerate_classes, _subterms, generalize, holds, nat_abstraction,
-                         nat_instance, parse_statement, random_env, statement, wide_env)
+                         nat_instance, parse_statement, random_env, small_envs, statement, wide_env, counterexample)
 from .env import DEFAULT_PREAMBLE
 from .pipeline import RECORD, run
 from .retrieval import Retriever, RetrievalPolicy, terms
@@ -182,6 +184,47 @@ class StructuralTactics(FixedTactics):
         return out + [(t, sc) for t, sc in extra if t not in have]
 
 
+# a case on any match left in the goal, keeping each case's equation: simpl
+# turns Nat.max (S a) x into a match on x, filter leaves an if (a match on a
+# bool), and a later case on the same scrutinee needs the earlier equation
+# for its contradictory branch to close
+CASES_EQ = ("repeat match goal with |- context [match ?x with _ => _ end] => "
+            "let E := fresh in destruct x eqn:E end")
+CLOSE_EQ = "first [lia | nia | congruence | (rewrite IH; reflexivity) | (f_equal; assumption)]"
+AGAIN = "rewrite ?list_max_app, ?list_sum_app, ?app_length in *; simpl in *"
+
+
+class StructuralTacticsV2(StructuralTactics):
+    """structural-tactics/v1, plus the two shapes tools/subclassify_opens.py
+    found missing in run 7's residue (results/subclassify-102.md): a case on
+    a match that simpl leaves, keeping its equation, and simpl again after a
+    library rewrite (list_max (rev l) = list_max l: rev unfolds to ++, and
+    list_max_app leaves list_max [a] to simplify)."""
+    identity = {"id": "structural-tactics/v2", "model": None, "provider": None}
+
+    def propose(self, obs, path, last_failure=None, tried=None):
+        out = super().propose(obs, path, last_failure, tried)
+        if not obs.goals:
+            return out
+        g = obs.goals[0]
+        ctx = hypothesis_vars(g.hypotheses)
+        lists = [v for v in ctx.get(L, []) if not v.startswith("IH")]
+        extra = []
+        for v in lists:
+            extra += [
+                (f"induction {v} as [|a t IH]; simpl in *; {CASES_EQ}; simpl in *; "
+                 f"{CASES_EQ}; simpl in *; {CLOSE_EQ}.", 0.9),
+                (f"induction {v} as [|a t IH]; simpl in *; {AGAIN}; {IFS}; simpl in *; "
+                 f"{CLOSE}.", 0.9),
+                (f"induction {v} as [|a t IH]; simpl in *; {CASES_EQ}; simpl in *.", 0.45)]
+        if "match" in g.conclusion or "if " in g.conclusion:
+            extra += [(f"{CASES_EQ}; simpl in *; {CLOSE_EQ}.", 0.85),
+                      (f"{CASES_EQ}; simpl in *.", 0.5)]
+        extra.append((f"{AGAIN}; {CLOSE}.", 0.8))
+        have = {t for t, _ in out}
+        return out + [(t, sc) for t, sc in extra if t not in have]
+
+
 def lemma_terms(stmt):
     """The constants and operators a statement's conclusion mentions."""
     body = stmt.split(", ", 1)[1] if stmt.startswith("forall") else stmt
@@ -278,6 +321,7 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
     check = EDGE + [random_env(rng) for _ in range(2000)]
     wrng = random.Random(seed + 11)
     wide_check = [wide_env(wrng) for _ in range(1000)]
+    small_check = small_envs()
     classes = enumerate_classes(max_term, envs, SIGNATURES[signature])
     seen, pool = set(exclude), []
     for c in candidates(classes, min_size, max_size, congruence="exact"):
@@ -293,6 +337,11 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
             stats["refuted_by_testing"] = stats.get("refuted_by_testing", 0) + 1
         elif not holds(c[0], c[1], c[2], wide_check):
             stats["refuted_by_wide_testing"] = stats.get("refuted_by_wide_testing", 0) + 1
+        elif counterexample(c[0], c[1], c[2], small_check) is not None:
+            # recorded with its counterexample, like the number-only drops
+            stats["refuted_by_small_lists"] = stats.get("refuted_by_small_lists", 0) + 1
+            stats.setdefault("small_counterexamples", []).append(
+                {"statement": s, "counterexample": counterexample(c[0], c[1], c[2], small_check)})
         elif nat_instance(*c, arng):
             stats["nat_instance"] = stats.get("nat_instance", 0) + 1
             stats.setdefault("nat_forms", []).append((s, nat_abstraction(*c)))
@@ -448,8 +497,10 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
     new operations' candidates. A run can change signature between rounds
     (rerun with more rounds and the new signature): rounds done under another
     signature do not replay this stream. prover: "fixed" (fixed-tactics/v1
-    under both passes) or "structural" (structural-tactics/v1)."""
-    base = {"fixed": FixedTactics, "structural": StructuralTactics}[prover]
+    under both passes), "structural" (structural-tactics/v1) or
+    "structural2" (structural-tactics/v2)."""
+    base = {"fixed": FixedTactics, "structural": StructuralTactics,
+            "structural2": StructuralTacticsV2}[prover]
     os.makedirs(out, exist_ok=True)
     corpus_path = os.path.join(out, "corpus.jsonl")
     summary_path = os.path.join(out, "rounds.jsonl")
@@ -460,6 +511,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                                     signature, tuple(WIDE) if require_new else ()))
     sig = signature + ("+new-only" if require_new else "")
     requeue, certified, queue, seeded = [], 0, [], set()
+    recorded_small = 0
     srng = random.Random(seed + 7)
     seed_check = (EDGE + [random_env(srng) for _ in range(2000)]
                   + [wide_env(srng) for _ in range(1000)])
@@ -574,6 +626,10 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         # The number-only drops are certified, not just tested: each one's
         # nat law is proved by lia / nia. One that is not goes back to the
         # prover in the next round.
+        small = dropped.get("small_counterexamples", [])
+        with open(os.path.join(rdir, "refuted.jsonl"), "w") as fh:
+            fh.writelines(json.dumps(x) + "\n" for x in small[recorded_small:])
+        recorded_small = len(small)
         forms = dropped.get("nat_forms", [])[certified:]
         requeue = certify_drops(forms)
         certified += len(forms)
@@ -603,7 +659,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                    "queue_after": {"requeue": requeue, "seeds": queue,
                                    "seeded": sorted(seeded), "certified": certified},
                    "dropped_before_gate_so_far": {k: v for k, v in dropped.items()
-                                                  if k != "nat_forms"},
+                                                  if k not in ("nat_forms",
+                                                               "small_counterexamples")},
                    "nat_drops_certified": len(forms) - len(requeue),
                    "nat_drops_requeued": requeue, "gate": dict(gate),
                    "known_by_corpus": known_by_corpus,

@@ -584,6 +584,32 @@ class TestExplore(unittest.TestCase):
         finally:
             s.close()
 
+    def test_structural_v2_proves_the_foundations_v1_cannot(self):
+        from proventhru import record as rec
+        from proventhru.explore import BASE, StructuralTactics, StructuralTacticsV2
+        from proventhru.pipeline import RECORD, run
+        stmts = ["forall (l1 : list nat), list_max (rev l1) = list_max l1",
+                 "forall (l1 : list nat), list_max l1 <= list_max (map S l1)"]
+        standing = {}
+        for k, pol in (("v1", StructuralTactics), ("v2", StructuralTacticsV2)):
+            with tempfile.TemporaryDirectory() as out:
+                run(stmts, out, BASE, budget=None, step_budget=150, backend="coqtop",
+                    log=lambda *_: None, policy_factory=pol)
+                standing[k] = [r["standing"] for r in rec.corpus(rec.load(os.path.join(out, RECORD)))]
+        self.assertEqual(standing["v2"], ["proved", "proved"])
+        self.assertNotEqual(standing["v1"], ["proved", "proved"])
+
+    def test_small_lists_drop_a_false_bound_with_its_counterexample(self):
+        from proventhru.explore import candidate_stream
+        bad = ("forall (l1 : list nat), length (removelast (removelast (removelast l1))) "
+               "<= list_sum l1")
+        stats = {}
+        kept = [s for _, s in zip(range(400), candidate_stream(stats=stats))]
+        self.assertNotIn(bad, kept)
+        cx = [x for x in stats.get("small_counterexamples", []) if x["statement"] == bad]
+        if cx:      # reached within the first 400; its counterexample is all zeros
+            self.assertEqual(set(cx[0]["counterexample"]["l1"]), {0})
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy

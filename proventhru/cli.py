@@ -130,7 +130,8 @@ def main(argv=None):
     x.add_argument("--max-term", type=int, default=5)
     x.add_argument("--min-size", type=int, default=3)
     x.add_argument("--signature", choices=["base", "wide"], default="base")
-    x.add_argument("--prover", choices=["fixed", "structural"], default="fixed")
+    x.add_argument("--prover", choices=["fixed", "structural", "structural2"],
+                   default="fixed")
     x.add_argument("--new-only", action="store_true",
                    help="with --signature wide: only candidates using nth, last or count_occ")
     x.add_argument("--max-size", type=int, default=9)
