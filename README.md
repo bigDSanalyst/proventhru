@@ -286,7 +286,20 @@ proventhru report out/A600/records.jsonl out/C600/records.jsonl
 
 ## The conjecture loop: proving what nobody asked for
 
-`proventhru explore` is the discovery half. In each round it:
+`proventhru explore` is the discovery half.
+
+**What it does and doesn't do yet.** It proposes, gates, proves and keeps lemmas, and
+generalizes them. It doesn't yet compose them:
+- 70 of run 7's 176 open statements follow from chains of corpus lemmas the prover never
+  combines;
+- inner citations (a discovered lemma used after an induction or case split) are zero
+  in every run so far;
+- the next step is saturation as a prover step, judged by the definitions in
+  `docs/conjecture-metrics.md` (written before it exists);
+- the lemmas are about lists and arithmetic, novel relative to the library and the
+  corpus, not to mathematics.
+
+In each round it:
 
 1. **generates** candidates over the stdlib `nat` / `list nat` signature
    (`proventhru/conjecture.py`, the same QuickSpec-style enumerator that built
