@@ -134,9 +134,8 @@ class LibraryRetriever(Retriever):
     goal term, and an instance in the corpus (list_sum (l1 ++ rev l1)) does,
     which hides the library lemma the proof needs (list_sum_app)."""
 
-    @staticmethod
-    def _search(session, ts):
-        return [e for e in Retriever._search(session, ts) if not LEMMA_NAME.fullmatch(e[0])]
+    def _search(self, session, ts):
+        return [e for e in super()._search(session, ts) if not LEMMA_NAME.fullmatch(e[0])]
 
 
 IFS = "repeat match goal with |- context [if ?b then _ else _] => destruct b end"

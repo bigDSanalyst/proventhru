@@ -135,7 +135,8 @@ def features(goal_concl, goal_hyps, name, stmt, position, prior):
         "premises": float(min(premises(stmt), 3)),
         "log_len": math.log(max(len(stmt), 1)),
         "head_match": float(bool(heads(lc) & heads(" ".join(goal_concl.split())))),
-        "log_rank": math.log(1 + position),
+        # capped: the training labels cover B's top 6 only
+        "log_rank": math.log(1 + min(position, 6)),
         "nat_name": float(name.startswith("Nat.")),
         "prior": prior,
     }
@@ -253,13 +254,15 @@ class Ranker:
 
 
 class RankedRetrievalPolicy(RetrievalPolicy):
-    """B with the ranker choosing which lemmas fill the slots."""
+    """B (retrieval/v2) with the ranker choosing which lemmas fill the slots."""
 
     def __init__(self, base, ranker, top=6, score=0.7):
-        super().__init__(base, top, score)
+        # retrieval/v2: the features read lemma statements, which v1's parser
+        # can corrupt (retrieval.parse)
+        super().__init__(base, top, score, version=2)
         self.ranker = ranker
         rid = ranker.sha256
-        self.identity = dict(base.identity, id=f"retrieval/v1+ranker/{rid[:16]}+{base.identity['id']}",
+        self.identity = dict(base.identity, id=f"retrieval/v2+ranker/{rid[:16]}+{base.identity['id']}",
                              retrieval={"top": top, "method": "coq Search on goal terms",
                                         "ranker": {"version": VERSION, "sha256": rid}})
 

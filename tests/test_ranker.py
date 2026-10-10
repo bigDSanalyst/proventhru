@@ -82,6 +82,26 @@ class TestModel(unittest.TestCase):
         self.assertEqual(r.sha256, Ranker(r.model).sha256)
 
 
+class TestCleanParse(unittest.TestCase):
+    # What coqtop prints for the first Search after BackTo (reproduced on
+    # 2026-10-10): the goal display follows the last entry.
+    DIRTY = ("list_sum_app: forall l1 l2 : list nat, list_sum (l1 ++ l2) = list_sum l1 + list_sum l2\n"
+             "1 goal (ID 3)\n  \n  ============================\n"
+             "  forall l1 l2 : list nat, list_sum (l1 ++ l2) = list_sum l2 + list_sum l1\n\n")
+
+    def test_v1_glues_the_goal_v2_does_not(self):
+        from proventhru.retrieval import parse
+        v1, v2 = parse(self.DIRTY), parse(self.DIRTY, clean=True)
+        self.assertIn("====", v1[0][1])
+        self.assertEqual(v2, [("list_sum_app", "forall l1 l2 : list nat, list_sum (l1 ++ l2) = "
+                                               "list_sum l1 + list_sum l2")])
+
+    def test_versions_name_themselves(self):
+        self.assertTrue(RetrievalPolicy(FixedTactics()).identity["id"].startswith("retrieval/v1+"))
+        self.assertTrue(RetrievalPolicy(FixedTactics(), version=2).identity["id"]
+                        .startswith("retrieval/v2+"))
+
+
 class TestHook(unittest.TestCase):
     def test_retrieval_default_select_is_the_first_top(self):
         p = RetrievalPolicy(FixedTactics(), top=6)
@@ -92,7 +112,7 @@ class TestHook(unittest.TestCase):
         rows = rows_for([("good", 1, 1.0)] * 5 + [("bad", 0, 0.0)] * 5)
         r = Ranker.train(rows, sources=["test"])
         p = RankedRetrievalPolicy(FixedTactics(), r)
-        self.assertTrue(p.identity["id"].startswith("retrieval/v1+ranker/"))
+        self.assertTrue(p.identity["id"].startswith("retrieval/v2+ranker/"))
         self.assertTrue(p.identity["id"].endswith("+fixed-tactics/v1"))
         self.assertEqual(p.identity["retrieval"]["ranker"]["sha256"], r.sha256)
 
