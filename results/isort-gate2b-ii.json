@@ -1,0 +1,123 @@
+{
+ "phase": "2b-ii",
+ "prover": "isort",
+ "corpus_forms": "all",
+ "candidates": 53,
+ "rounds": 4,
+ "corpus": 11,
+ "proved_by_round": [
+  8,
+  2,
+  1,
+  0
+ ],
+ "derived": 0,
+ "gold": {
+  "insert_length": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat) (n : nat), length (insert n l1) = S (length l1)",
+   "result": "proved exactly",
+   "lemma": "pt_r0_7",
+   "proof": [
+    "intros.",
+    "induction l1 as [|a t IH]; simpl in *; repeat match goal with |- context [if ?b then _ else _] => destruct b end; simpl in *; first [lia | nia]."
+   ],
+   "cites": [],
+   "sites": []
+  },
+  "sort_length": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat), length (sort l1) = length l1",
+   "result": "proved exactly",
+   "lemma": "pt_r1_0",
+   "proof": [
+    "intros.",
+    "induction l1 as [|a t IH]; simpl in *; try solve [lia | reflexivity | constructor].",
+    "rewrite pt_r0_7; first [lia | reflexivity | congruence | assumption]."
+   ],
+   "cites": [
+    "pt_r0_7"
+   ],
+   "sites": [
+    {
+     "lemma": "pt_r0_7",
+     "index": 2,
+     "inner": true
+    }
+   ]
+  },
+  "insert_sorted": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat) (n : nat), sorted l1 -> sorted (insert n l1)",
+   "result": "proved exactly",
+   "lemma": "pt_r0_5",
+   "proof": [
+    "intros.",
+    "induction H as [|x|x y t Hxy Ht IH]; simpl in *; repeat match goal with |- context [match ?x with _ => _ end] => let E := fresh in destruct x eqn:E end; repeat match goal with H : (_ <=? _) = true |- _ => apply Nat.leb_le in H | H : (_ <=? _) = false |- _ => apply Nat.leb_gt in H end; simpl in *; repeat match goal with |- context [match ?x with _ => _ end] => let E := fresh in destruct x eqn:E end; repeat match goal with H : (_ <=? _) = true |- _ => apply Nat.leb_le in H | H : (_ <=? _) = false |- _ => apply Nat.leb_gt in H end; first [lia | reflexivity | assumption | (repeat constructor; first [lia | assumption | eassumption]) | (constructor; [lia | assumption])]."
+   ],
+   "cites": [],
+   "sites": []
+  },
+  "insert_perm": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat) (n : nat), Permutation (n :: l1) (insert n l1)",
+   "result": "proved exactly",
+   "lemma": "pt_r0_6",
+   "proof": [
+    "intros.",
+    "induction l1 as [|a t IH]; simpl in *; try solve [lia | reflexivity | constructor].",
+    "repeat match goal with |- context [match ?x with _ => _ end] => let E := fresh in destruct x eqn:E end; simpl in *; first [reflexivity | (apply perm_skip; assumption) | (eapply perm_trans; [apply perm_swap | apply perm_skip; assumption])]."
+   ],
+   "cites": [],
+   "sites": []
+  },
+  "sorted_sort_id": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat), sorted l1 -> sort l1 = l1",
+   "result": "not proved"
+  },
+  "insert_In": {
+   "role": "helper",
+   "result": "not expressible"
+  },
+  "sort_sorted": {
+   "role": "main",
+   "statement": "forall (l1 : list nat), sorted (sort l1)",
+   "result": "proved exactly",
+   "lemma": "pt_r0_0",
+   "proof": [
+    "intros.",
+    "induction l1.",
+    "constructor.",
+    "simpl.",
+    "induction IHl1 as [|x|x y t Hxy Ht IH]; simpl in *; repeat match goal with |- context [match ?x with _ => _ end] => let E := fresh in destruct x eqn:E end; repeat match goal with H : (_ <=? _) = true |- _ => apply Nat.leb_le in H | H : (_ <=? _) = false |- _ => apply Nat.leb_gt in H end; simpl in *; repeat match goal with |- context [match ?x with _ => _ end] => let E := fresh in destruct x eqn:E end; repeat match goal with H : (_ <=? _) = true |- _ => apply Nat.leb_le in H | H : (_ <=? _) = false |- _ => apply Nat.leb_gt in H end; first [lia | reflexivity | assumption | (repeat constructor; first [lia | assumption | eassumption]) | (constructor; [lia | assumption])]."
+   ],
+   "cites": [],
+   "sites": []
+  },
+  "sort_perm": {
+   "role": "main",
+   "statement": "forall (l1 : list nat), Permutation l1 (sort l1)",
+   "result": "not proved"
+  },
+  "sort_idem": {
+   "role": "main",
+   "statement": "forall (l1 : list nat), sort (sort l1) = sort l1",
+   "result": "not proved"
+  }
+ },
+ "gold_helpers_proved_exactly": 4,
+ "gold_main_proved_exactly": 1,
+ "citing_proofs": 3,
+ "citations_top": 2,
+ "citations_inner": 1,
+ "inner_sites": [
+  {
+   "lemma": "pt_r0_7",
+   "index": 2,
+   "inner": true,
+   "lemma_of": "pt_r1_0"
+  }
+ ],
+ "axiom_free": true
+}
