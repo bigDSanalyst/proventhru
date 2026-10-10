@@ -18,6 +18,40 @@ report them; papers with more than one version are noted.
 | Rango | retrieve similar proofs, not just lemma names | a candidate B variant; needs an amendment for test |
 | Lean skill files | a result counts only with no `sorry` and no axioms | built: `Print Assumptions` on every corpus lemma |
 
+## Taken, re-implemented, new
+
+Most of the loop is a re-implementation. That's the honest baseline for any claim made
+about it.
+
+**Re-implemented from prior work** (we claim nothing here):
+- the conjecture-test-prove loop over a signature: QuickSpec, HipSpec, Hipster;
+- generalizing discovered lemmas: anti-unification is Plotkin's and Reynolds' (1970),
+  surveyed by [Cerna & Kutsia (IJCAI 2023)](https://www.ijcai.org/proceedings/2023/736);
+  generalization as a library-growth step is LEGO-Prover's evolver;
+- a growing lemma library used by later proofs: HipSpec, LEGO-Prover;
+- premise retrieval in Coq: Rango, and Tactician before it;
+- helper-lemma synthesis in Rocq: [LemmaNet (2026)](https://arxiv.org/pdf/2603.22114).
+  LemmaNet is goal-directed: an LLM writes the lemmas a program-verification goal needs
+  (Frama-C verification conditions). That's a different setting from exploring a
+  signature, but the same proof assistant.
+
+**Sharpened** (known problems, a finer decomposition):
+- retrieval failing three ways, by ranking, by form and by crowding, each with its own
+  lever (`results/dev-lemma-forms.md`). Rango addresses retrieval jointly.
+
+**New, as far as we've read** (not an exhaustive search; each claim is "no precedent
+found", not "none exists"):
+- **Where a citation sits.** Deciding whether the loop deepens or only closes by where
+  in a proof a discovered lemma is cited: at the top, or inside an induction or case
+  split. It counts only after the instance-aware derivation check has failed on the
+  statement (`results/explore-run3.md` shows why that condition matters).
+- **Certified filters.** The generator's number-only drops are proved in Coq, every
+  round, rather than tested.
+- **`Print Assumptions` as a gate.** Every corpus lemma must be axiom-free, machine-
+  checked each round; the Lean community's "no sorry, no axioms" norm, enforced.
+- **The experimental discipline.** Pre-registration with a hashed protocol, refusal to
+  run outside it, and hash-chained records, applied to prover evaluation.
+
 ## Theory exploration: the ancestor of `proventhru explore`
 
 - **QuickSpec, HipSpec, Hipster, TheSy.**

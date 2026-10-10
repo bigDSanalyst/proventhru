@@ -49,6 +49,18 @@ OPS = {
     "seq": ((N, N), L, lambda s, n: tuple(range(s, s + n)), lambda s, n: f"seq {s} {n}"),
     "removelast": ((L,), L, lambda a: a[:-1], lambda a: f"removelast {a}"),
 }
+# The wider signature, for exploration only: the held-out and dev sets were
+# generated from OPS alone, and enumerate_classes() uses OPS unless told
+# otherwise, so tools/make_eval.py's output does not change. count_occ stands
+# in for In: membership as a number (count_occ l x > 0), since the generator
+# builds equations and inequalities between nat and list terms, not Props.
+WIDE = {
+    "nth": ((N, L), N, lambda n, a: a[n] if n < len(a) else 0, lambda n, a: f"nth {n} {a} 0"),
+    "last": ((L,), N, lambda a: a[-1] if a else 0, lambda a: f"last {a} 0"),
+    "count": ((L, N), N, lambda a, x: a.count(x),
+              lambda a, x: f"count_occ Nat.eq_dec {a} {x}"),
+}
+ALL_OPS = {**OPS, **WIDE}
 INFIX = {"add", "mul", "sub", "app", "cons"}
 CAP = 60  # values above this are not compared (repeat/seq/mul blow up)
 
@@ -58,7 +70,7 @@ class Term:
 
     def __init__(self, op, args=(), type_=None):
         self.op, self.args = op, tuple(args)
-        self.type = VARS[op] if op in VARS else OPS[op][1]
+        self.type = VARS[op] if op in VARS else ALL_OPS[op][1]
         self.size = 1 + sum(a.size for a in self.args)
 
     def eval(self, env):
@@ -67,7 +79,7 @@ class Term:
         vals = [a.eval(env) for a in self.args]
         if any(v is None for v in vals):
             return None
-        out = OPS[self.op][2](*vals)
+        out = ALL_OPS[self.op][2](*vals)
         if (isinstance(out, int) and out > CAP) or (isinstance(out, tuple) and len(out) > CAP):
             return None
         return out
@@ -77,7 +89,7 @@ class Term:
             return (names or {}).get(self.op, self.op)
         parts = [a.coq(names, top=False) for a in self.args]
         parts = [p if not a.args else f"({p})" for a, p in zip(self.args, parts)]
-        return OPS[self.op][3](*parts)
+        return ALL_OPS[self.op][3](*parts)
 
     def vars(self):
         if self.op in VARS:
@@ -93,6 +105,15 @@ def random_env(rng):
     return {"l1": lst(), "l2": lst(), "n": rng.randint(0, 6), "m": rng.randint(0, 6)}
 
 
+def wide_env(rng):
+    """Wider inputs than random_env (values to 100, lists to 12): small
+    values let a false bound through (list_max (filter Nat.even l) <=
+    S (S (S (S n))) holds while every element is at most 5). For
+    exploration; the eval sets were generated with random_env alone."""
+    lst = lambda: tuple(rng.randint(0, 100) for _ in range(rng.randint(0, 12)))  # noqa: E731
+    return {"l1": lst(), "l2": lst(), "n": rng.randint(0, 100), "m": rng.randint(0, 100)}
+
+
 EDGE = [{"l1": (), "l2": (), "n": 0, "m": 0}, {"l1": (0,), "l2": (), "n": 1, "m": 0},
         {"l1": (), "l2": (3, 1), "n": 0, "m": 2}, {"l1": (2, 2), "l2": (2,), "n": 2, "m": 2}]
 
@@ -102,8 +123,10 @@ def fingerprint(t, envs):
     return None if any(v is None for v in vals) else vals
 
 
-def enumerate_classes(max_size, envs):
-    """{fingerprint: [terms in size order]}; reps[type][size] = class reps."""
+def enumerate_classes(max_size, envs, ops=None):
+    """{fingerprint: [terms in size order]}; reps[type][size] = class reps.
+    ops: the signature, OPS (the eval sets') unless given."""
+    ops = OPS if ops is None else ops
     classes = {}
     reps = {L: defaultdict(list), N: defaultdict(list)}
 
@@ -121,7 +144,7 @@ def enumerate_classes(max_size, envs):
     for v in VARS:
         add(Term(v))
     for size in range(1, max_size + 1):
-        for op, (args, _, _, _) in OPS.items():
+        for op, (args, _, _, _) in ops.items():
             if not args:
                 if size == 1:
                     add(Term(op))
@@ -233,7 +256,7 @@ def _atoms(t, out):
     a nat-typed term whose head takes a list, outermost first, keyed by
     rendering so equal subterms share one atom. Nat operations above them
     (Nat.min n (length l)) stay, since they are the law over nat."""
-    if t.type == N and t.op not in VARS and L in OPS[t.op][0]:
+    if t.type == N and t.op not in VARS and L in ALL_OPS[t.op][0]:
         out.setdefault(t.coq(), len(out))
         return
     for a in t.args:
@@ -245,7 +268,7 @@ def _eval_abstract(t, atoms, env):
         return env[("atom", atoms[t.coq()])]
     if t.op in VARS:
         return env[t.op]
-    return OPS[t.op][2](*(_eval_abstract(a, atoms, env) for a in t.args))
+    return ALL_OPS[t.op][2](*(_eval_abstract(a, atoms, env) for a in t.args))
 
 
 def nat_instance(lhs, rhs, rel, rng, tests=500):
@@ -285,7 +308,7 @@ def nat_abstraction(lhs, rhs, rel):
         for a in t.args:
             p, atom = go(a)
             parts.append(p if atom else f"({p})")
-        return OPS[t.op][3](*parts), not t.args
+        return ALL_OPS[t.op][3](*parts), not t.args
     vs = [f"a{i}" for i in range(len(atoms))] + sorted(
         v for v in lhs.vars() | rhs.vars() if VARS[v] == N)
     body = f"{go(lhs)[0]} {rel} {go(rhs)[0]}"
@@ -299,9 +322,10 @@ def nat_abstraction(lhs, rhs, rel):
 HEADS = {"S": "S", "length": "length", "list_sum": "sum", "list_max": "lmax", "rev": "rev",
          "map S": "mapS", "filter Nat.even": "even", "firstn": "firstn", "skipn": "skipn",
          "repeat": "repeat", "seq": "seq", "removelast": "removelast", "Nat.max": "max",
-         "Nat.min": "min"}
+         "Nat.min": "min", "nth": "nth", "last": "last", "count_occ Nat.eq_dec": "count"}
+SUFFIX = {"nth": "0", "last": "0"}     # the default argument the rendering fixes
 INFIX_OPS = {"+": "add", "*": "mul", "-": "sub", "++": "app", "::": "cons"}
-TOKEN = re.compile(r"map S|filter Nat\.even|Nat\.max|Nat\.min|\+\+|::|\[\]|[()+*-]|[\w.]+")
+TOKEN = re.compile(r"count_occ Nat\.eq_dec|map S|filter Nat\.even|Nat\.max|Nat\.min|\+\+|::|\[\]|[()+*-]|[\w.]+")
 
 
 def _split_top(text, seps):
@@ -336,7 +360,11 @@ def parse_term(text):
             return Term("nil")
         if t in HEADS:
             op = HEADS[t]
-            return Term(op, [atom() for _ in OPS[op][0]])
+            term = Term(op, [atom() for _ in ALL_OPS[op][0]])
+            if op in SUFFIX:
+                assert toks[pos[0]] == SUFFIX[op], text
+                pos[0] += 1
+            return term
         raise ValueError(f"cannot read {t!r} in {text!r}")
 
     def expr():
@@ -358,6 +386,10 @@ def parse_statement(stmt):
     body = stmt.split(", ", 1)[1] if stmt.startswith("forall") else stmt
     lhs, rel, rhs = _split_top(body, [" <= ", " = "])
     return parse_term(lhs), parse_term(rhs), rel
+
+
+def ops_used(t):
+    return {t.op} | set().union(*(ops_used(a) for a in t.args)) if t.args else {t.op}
 
 
 def _subterms(t):

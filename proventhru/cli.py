@@ -129,6 +129,9 @@ def main(argv=None):
     x.add_argument("--seed", type=int, default=2, help="generator seed (the test set used 1)")
     x.add_argument("--max-term", type=int, default=5)
     x.add_argument("--min-size", type=int, default=3)
+    x.add_argument("--signature", choices=["base", "wide"], default="base")
+    x.add_argument("--new-only", action="store_true",
+                   help="with --signature wide: only candidates using nth, last or count_occ")
     x.add_argument("--max-size", type=int, default=9)
     x.add_argument("--exclude", action="append", default=[],
                    help="statement file never to propose from (repeatable): held-out and dev sets")
@@ -155,7 +158,8 @@ def main(argv=None):
         corpus, rounds = explore(a.out, rounds=a.rounds, per_round=a.per_round,
                                  step_budget=a.step_budget, jobs=a.jobs, exclude=ex,
                                  seed=a.seed, max_term=a.max_term, min_size=a.min_size,
-                                 max_size=a.max_size, backend=a.backend or "coqtop")
+                                 max_size=a.max_size, backend=a.backend or "coqtop",
+                                 signature=a.signature, require_new=a.new_only)
         print(json.dumps({"corpus": len(corpus), "rounds": rounds[-1:] and rounds[-1]}))
         return 0
     if a.cmd == "protocol":

@@ -7,7 +7,9 @@ Theory exploration over the stdlib nat and list nat signature, in rounds:
   1. generate  the next per_round candidates from conjecture.py, smallest
                first: small laws are proved first and are the lemmas the
                bigger ones need.
-  2. test      each candidate on 2,000 fresh random inputs (plausibility),
+  2. test      each candidate on 2,000 fresh random inputs and 1,000 wide
+               ones (values to 100, lists to 12: small values let false
+               bounds through),
                and drop instances of laws over nat alone: with every
                list-derived number replaced by a free one, 0 * list_sum l = 0
                is still true, so it says nothing about lists.
@@ -55,9 +57,9 @@ import time
 from collections import Counter
 
 from . import record as rec
-from .conjecture import (EDGE, L, N, VARS, anti_unify, canonical_names, candidates,
+from .conjecture import (ALL_OPS, EDGE, L, N, OPS, VARS, WIDE, ops_used, anti_unify, canonical_names, candidates,
                          constant_list, enumerate_classes, _subterms, generalize, holds, nat_abstraction,
-                         nat_instance, parse_statement, random_env, statement)
+                         nat_instance, parse_statement, random_env, statement, wide_env)
 from .env import DEFAULT_PREAMBLE
 from .pipeline import RECORD, run
 from .retrieval import Retriever, RetrievalPolicy, terms
@@ -211,20 +213,31 @@ def corollary(stmt, pre, corpus, backend="coqtop", timeout=2):
         s.close()
 
 
-def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), stats=None):
+SIGNATURES = {"base": OPS, "wide": ALL_OPS}
+
+
+def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), stats=None,
+                     signature="base", require=()):
     """Plausible candidate statements, smallest first, deterministic in seed.
     exclude: statements never to propose (the held-out and dev sets).
     Instances of laws over nat alone (0 * list_sum l = 0) are dropped before
     the gate: they are true of any number, so they say nothing about lists.
-    stats, if given, counts what each filter dropped."""
+    stats, if given, counts what each filter dropped. signature: "base" (the
+    eval sets' functions) or "wide" (with nth, last, count_occ). require:
+    keep only candidates that use one of these operations (the new ones, to
+    explore only what widening added)."""
     stats = {} if stats is None else stats
     rng = random.Random(seed)
     arng = random.Random(seed + 1)
     envs = EDGE + [random_env(rng) for _ in range(40)]
     check = EDGE + [random_env(rng) for _ in range(2000)]
-    classes = enumerate_classes(max_term, envs)
+    wrng = random.Random(seed + 11)
+    wide_check = [wide_env(wrng) for _ in range(1000)]
+    classes = enumerate_classes(max_term, envs, SIGNATURES[signature])
     seen, pool = set(exclude), []
     for c in candidates(classes, min_size, max_size):
+        if require and not (ops_used(c[0]) | ops_used(c[1])) & set(require):
+            continue
         s = statement(*c, canonical_names(c[0], c[1]))
         if s not in seen:
             seen.add(s)
@@ -233,6 +246,8 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
     for _, s, c in pool:
         if not holds(c[0], c[1], c[2], check):
             stats["refuted_by_testing"] = stats.get("refuted_by_testing", 0) + 1
+        elif not holds(c[0], c[1], c[2], wide_check):
+            stats["refuted_by_wide_testing"] = stats.get("refuted_by_wide_testing", 0) + 1
         elif nat_instance(*c, arng):
             stats["nat_instance"] = stats.get("nat_instance", 0) + 1
             stats.setdefault("nat_forms", []).append((s, nat_abstraction(*c)))
@@ -380,25 +395,33 @@ def _load(path):
 
 def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), seed=2,
             max_term=5, min_size=3, max_size=9, backend="coqtop", retrieval_top=6,
-            log=print, statements=None):
+            log=print, statements=None, signature="base", require_new=False):
     """statements: an explicit candidate list to use instead of the generator
-    (tests; or a curated batch). Excluded statements are dropped from it too."""
+    (tests; or a curated batch). Excluded statements are dropped from it too.
+    signature / require_new: explore the wide signature, optionally only its
+    new operations' candidates. A run can change signature between rounds
+    (rerun with more rounds and the new signature): rounds done under another
+    signature do not replay this stream."""
     os.makedirs(out, exist_ok=True)
     corpus_path = os.path.join(out, "corpus.jsonl")
     summary_path = os.path.join(out, "rounds.jsonl")
     corpus, done = _load(corpus_path), {r["round"]: r for r in _load(summary_path)}
     dropped = {}
     stream = (iter([x for x in statements if x not in set(exclude)]) if statements is not None
-              else candidate_stream(seed, max_term, min_size, max_size, set(exclude), dropped))
+              else candidate_stream(seed, max_term, min_size, max_size, set(exclude), dropped,
+                                    signature, tuple(WIDE) if require_new else ()))
+    sig = signature + ("+new-only" if require_new else "")
     requeue, certified, queue, seeded = [], 0, [], set()
     srng = random.Random(seed + 7)
-    seed_check = EDGE + [random_env(srng) for _ in range(2000)]
+    seed_check = (EDGE + [random_env(srng) for _ in range(2000)]
+                  + [wide_env(srng) for _ in range(1000)])
     for r in range(rounds):
         if r in done:
             # replay the stream and the queues exactly as the round saw them
             q = done[r].get("queue_after") or {}
             take = done[r].get("from_stream", per_round - len(requeue))
-            list(zip(range(take), stream))
+            if done[r].get("signature", "base") == sig:
+                list(zip(range(take), stream))
             requeue, queue = q.get("requeue", []), q.get("seeds", [])
             seeded = set(q.get("seeded", []))
             certified = q.get("certified", certified)
@@ -523,7 +546,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                  for x in citation_sites(c["proof"], seen_names)]
         heads = {k: list(rec.head(rec.load(os.path.join(rdir, k, RECORD))))
                  for k in ("fixed", "retrieval") if os.path.exists(os.path.join(rdir, k, RECORD))}
-        summary = {"round": r, "candidates": offered, "from_stream": len(fresh_batch),
+        summary = {"round": r, "signature": sig, "candidates": offered,
+                   "from_stream": len(fresh_batch),
                    "from_seeds": len(from_seeds),
                    "seeds_proposed": len(fresh_seeds),
                    "proved_from_seeds": sum(c["source"] != "generator" for c in new),
@@ -549,6 +573,14 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                                  "derived_top": len(derived),
                                  "proofs_top": sum(not x["inner"] for x in sites),
                                  "proofs_inner": sum(x["inner"] for x in sites)},
+                   # proofs citing two or more distinct discovered lemmas, and
+                   # those citing them at different tactics of the proof
+                   "multi_citation_proofs": sum(
+                       len({x["lemma"] for x in sites if x["statement"] == c["statement"]}) > 1
+                       for c in new),
+                   "multi_citation_separate": sum(
+                       len({x["index"] for x in sites if x["statement"] == c["statement"]}) > 1
+                       for c in new),
                    "citation_sites": sites, "corpus_compile_s": compile_s, "corpus_size": len(corpus),
                    "preamble_sha256": rec.sha256(pre), "record_heads": heads}
         with open(summary_path, "a") as fh:

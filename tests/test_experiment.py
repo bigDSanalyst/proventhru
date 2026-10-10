@@ -2,6 +2,7 @@
 protocol check, resume, the report's failure classes and McNemar, and the
 eval-set generator."""
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -525,6 +526,18 @@ class TestExplore(unittest.TestCase):
                          "intros; pose proof (pt_r0_0 (map S l1)); lia.")
         general = "forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)"
         self.assertIsNone(corollary(general, preamble(c), c))
+
+    def test_the_wide_signature_adds_nth_last_count_occ_and_reads_back(self):
+        from proventhru.conjecture import parse_statement, statement
+        from proventhru.explore import candidate_stream
+        base = [s for _, s in zip(range(30), candidate_stream(2, 4, 3, 6))]
+        wide = [s for _, s in zip(range(30), candidate_stream(2, 4, 3, 6, signature="wide",
+                                                              require=("nth", "last", "count")))]
+        new = re.compile(r"\b(nth|last|count_occ)\b")      # not removelast
+        self.assertFalse(any(new.search(s) for s in base))
+        self.assertTrue(wide and all(new.search(s) for s in wide))
+        for s in wide:
+            self.assertEqual(statement(*parse_statement(s)), s)
 
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS

@@ -42,7 +42,9 @@ def main(argv=None):
               f"({sum(d.get('stage') == 'after_proof' for d in derived)} after proof); "
               f"gate closed {rounds[r].get('known_by_corpus', 0)} with one lemma; "
               f"citations in proofs: {sum(not x['inner'] for x in sites)} top, "
-              f"{sum(x['inner'] for x in sites)} inner; corpus compile "
+              f"{sum(x['inner'] for x in sites)} inner; "
+              f"{sum(len({x['lemma'] for x in sites if x['statement'] == c['statement']}) > 1 for c in new)}"
+              f" proofs cite two or more; corpus compile "
               f"{rounds[r].get('corpus_compile_s', '?')} s")
         for x in sites:
             print(f"    {'INNER' if x['inner'] else 'top  '} {x['lemma']} at tactic {x['index']}: "
