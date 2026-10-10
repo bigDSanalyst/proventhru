@@ -16,6 +16,7 @@ import re
 
 import numpy as np
 
+from .keys import key
 from .retrieval import RetrievalPolicy, mentions, terms
 
 VERSION = "lemma-ranker/v1"
@@ -143,7 +144,9 @@ def features(goal_concl, goal_hyps, name, stmt, position, prior):
 
 
 def fold_of(statement):
-    return int(hashlib.sha256(statement.encode()).hexdigest(), 16) % FOLDS
+    """The statement's fold, by its key up to bound names, so copies of a
+    statement fall in one fold."""
+    return int(hashlib.sha256(key(statement).encode()).hexdigest(), 16) % FOLDS
 
 
 def priors(rows):
@@ -253,23 +256,38 @@ class Ranker:
         return [found[i] for i in order], order
 
 
-class RankedRetrievalPolicy(RetrievalPolicy):
-    """B (retrieval/v2) with the ranker choosing which lemmas fill the slots."""
+def _goal_text(goal):
+    return " ".join(goal.conclusion.split())
 
-    def __init__(self, base, ranker, top=6, score=0.7):
-        # retrieval/v2: the features read lemma statements, which v1's parser
-        # can corrupt (retrieval.parse)
+
+def _tie(goal, name, salt=""):
+    return hashlib.sha256(f"{salt}{_goal_text(goal)}|{name}".encode()).hexdigest()
+
+
+class SlotPolicy(RetrievalPolicy):
+    """B's retrieval (v2: the slots read statement text, which v1's parser
+    can corrupt) with another rule choosing which lemmas fill the slots.
+    B's forms and B's scores (0.7 - 0.01 x slot) are kept, so node
+    priorities follow the same rule. cost.ranker records, for each offered
+    lemma, its statement and its position in B's list."""
+    kind = None
+
+    def __init__(self, base, top=6, score=0.7, tag=None, extra=None):
         super().__init__(base, top, score, version=2)
-        self.ranker = ranker
-        rid = ranker.sha256
-        self.identity = dict(base.identity, id=f"retrieval/v2+ranker/{rid[:16]}+{base.identity['id']}",
-                             retrieval={"top": top, "method": "coq Search on goal terms",
-                                        "ranker": {"version": VERSION, "sha256": rid}})
+        self.identity = dict(base.identity, id=f"retrieval/v2+{tag}+{base.identity['id']}",
+                             retrieval=dict({"top": top, "method": "coq Search on goal terms",
+                                             "slots": self.kind}, **(extra or {})))
+
+    def choose(self, goal, found):
+        """[(index in found, extra fields)] in slot order."""
+        raise NotImplementedError
 
     def select(self, goal, found):
-        picked, positions = self.ranker.select(goal, found, self.top)
-        self.picked = {"pool": len(found), "positions": positions}
-        return picked
+        picks = self.choose(goal, found)
+        self.picked = {"kind": self.kind, "pool": len(found),
+                       "offered": [dict({"name": found[i][0], "position": i,
+                                         "statement": found[i][1]}, **x) for i, x in picks]}
+        return [found[i] for i, _ in picks]
 
     def propose(self, obs, path, last_failure=None, tried=None):
         self.picked = None
@@ -277,3 +295,56 @@ class RankedRetrievalPolicy(RetrievalPolicy):
         if self.picked is not None:
             self.last_cost["ranker"] = self.picked
         return out
+
+
+class RankedRetrievalPolicy(SlotPolicy):
+    """B' with the ranker choosing the slots: the top lemmas by score."""
+    kind = "ranked"
+
+    def __init__(self, base, ranker, top=6, score=0.7):
+        self.ranker = ranker
+        rid = ranker.sha256
+        super().__init__(base, top, score, tag=f"ranker/{rid[:16]}",
+                         extra={"ranker": {"version": VERSION, "sha256": rid}})
+
+    def choose(self, goal, found):
+        s = self.ranker.scores(goal, found)
+        order = sorted(range(len(found)), key=lambda i: (-s[i], i))[: self.top]
+        return [(i, {"score": round(s[i], 6)}) for i in order]
+
+
+class PlaceboRetrievalPolicy(SlotPolicy):
+    """P0: the slots filled by the lemmas of smallest sha256('0|' + goal +
+    '|' + name), a ranker that knows nothing. Its gains over B' are the churn
+    any change of slots produces, which sets the plateau threshold."""
+    kind = "placebo"
+
+    def __init__(self, base, top=6, score=0.7):
+        super().__init__(base, top, score, tag="placebo/v1")
+
+    def choose(self, goal, found):
+        order = sorted(range(len(found)), key=lambda i: _tie(goal, found[i][0], "0|"))
+        return [(i, {}) for i in order[: self.top]]
+
+
+class InterleavedRetrievalPolicy(SlotPolicy):
+    """The evaluation run: the union of B's top 6 and the ranker's top 6. A
+    lemma's slot is the smaller of its two ranks, ties by sha256(goal + '|'
+    + name). Records both ranks of every offered lemma, so recall@6 and MRR
+    of either order can be read at any node of the run's proofs."""
+    kind = "interleave"
+
+    def __init__(self, base, ranker, top=6, score=0.7):
+        self.ranker = ranker
+        rid = ranker.sha256
+        super().__init__(base, top, score, tag=f"interleave/{rid[:16]}",
+                         extra={"ranker": {"version": VERSION, "sha256": rid}})
+
+    def choose(self, goal, found):
+        s = self.ranker.scores(goal, found)
+        r_order = sorted(range(len(found)), key=lambda i: (-s[i], i))
+        r_rank = {i: k for k, i in enumerate(r_order)}
+        union = set(range(min(self.top, len(found)))) | set(r_order[: self.top])
+        slot = sorted(union, key=lambda i: (min(i, r_rank[i]), _tie(goal, found[i][0])))
+        return [(i, {"r_rank": r_rank[i], "score": round(s[i], 6),
+                     "in_b6": i < self.top, "in_r6": r_rank[i] < self.top}) for i in slot]

@@ -102,6 +102,53 @@ class TestCleanParse(unittest.TestCase):
                         .startswith("retrieval/v2+"))
 
 
+class TestSlotPolicies(unittest.TestCase):
+    def setUp(self):
+        rows = rows_for([("good", 1, 1.0)] * 30 + [("bad", 0, 0.0)] * 30)
+        self.r = Ranker.train(rows, sources=["test"])
+        self.goal = Goal(0, "length (l1 ++ l2) = length l1 + length l2", ("l1, l2 : list nat",))
+        self.found = [(f"L{i}", f"forall l : list nat, length l = {i}") for i in range(20)]
+
+    def test_placebo_is_deterministic_and_ignores_order(self):
+        from proventhru.ranker import PlaceboRetrievalPolicy
+        p = PlaceboRetrievalPolicy(FixedTactics())
+        a = p.select(self.goal, self.found)
+        b = p.select(self.goal, list(reversed(self.found)))
+        self.assertEqual(len(a), 6)
+        self.assertEqual(sorted(a), sorted(b))
+        self.assertEqual(p.identity["id"], "retrieval/v2+placebo/v1+fixed-tactics/v1")
+
+    def test_interleave_holds_both_top_sixes(self):
+        from proventhru.ranker import InterleavedRetrievalPolicy
+        p = InterleavedRetrievalPolicy(FixedTactics(), self.r)
+        picked = p.select(self.goal, self.found)
+        names = {n for n, _ in picked}
+        b6 = {n for n, _ in self.found[:6]}
+        s = self.r.scores(self.goal, self.found)
+        r6 = {self.found[i][0] for i in sorted(range(20), key=lambda i: (-s[i], i))[:6]}
+        self.assertEqual(names, b6 | r6)
+        for o in p.picked["offered"]:
+            self.assertEqual(o["in_b6"], o["position"] < 6)
+            self.assertEqual(o["in_r6"], o["r_rank"] < 6)
+
+    def test_ranked_records_statements(self):
+        p = RankedRetrievalPolicy(FixedTactics(), self.r)
+        picked = p.select(self.goal, self.found)
+        self.assertEqual([o["name"] for o in p.picked["offered"]], [n for n, _ in picked])
+        self.assertTrue(all(o["statement"] for o in p.picked["offered"]))
+
+
+class TestKeys(unittest.TestCase):
+    def test_twins(self):
+        from proventhru.keys import key, twin_key
+        a = "forall (l1 l2 : list nat), list_sum l1 + list_sum l2 = list_sum (l2 ++ l1)"
+        b = "forall (xs ys : list nat), list_sum xs + list_sum ys = list_sum (xs ++ ys)"
+        self.assertNotEqual(key(a), key(b))
+        self.assertEqual(twin_key(a), twin_key(b))
+        self.assertEqual(key("forall (xs : list nat), length xs = 0"),
+                         key("forall (l1 : list nat), length l1 = 0"))
+
+
 class TestHook(unittest.TestCase):
     def test_retrieval_default_select_is_the_first_top(self):
         p = RetrievalPolicy(FixedTactics(), top=6)

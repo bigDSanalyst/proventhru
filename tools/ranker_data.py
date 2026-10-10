@@ -8,9 +8,10 @@ cost.lemmas; corpus `pt_` names, in run 3's lists, are left out). Its label:
   1  the proof's next tactic at the node is, as a string, one of the forms
      retrieval offered for the lemma there (a tactic that merely names it,
      like structural-tactics/v2's `rewrite ?list_sum_app`, is not);
-  0  every form offered for it there was tried there and every one failed
-     (error, timeout or refused);
-  -  otherwise, including a form that succeeded off the found path: no row.
+  0  every form offered for it there was tried there and Coq refused every
+     one (session outcome error);
+  -  otherwise, including a form that timed out, was refused by the guard,
+     succeeded off the found path or wasn't tried: no row.
 Episodes are read once by id (exploration run 5's rounds 0-5 are copies of
 run 4's), and a row repeated across runs (same statement up to bound names,
 same goal, same lemma) is kept once.
@@ -29,12 +30,11 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from proventhru.explore import LEMMA_NAME, LibraryRetriever  # noqa: E402
 from proventhru.ranker import features  # noqa: E402
 from proventhru.retrieval import terms  # noqa: E402
 from proventhru.session import open_session  # noqa: E402
-from ranker_sets import key as statement_key  # noqa: E402
+from proventhru.keys import key as statement_key  # noqa: E402
 
 HERE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 RUNS = "/tmp/claude-0/runs"
@@ -86,23 +86,31 @@ def tasks_from(path):
             for name, fs in offered.items():
                 if nxt in fs:
                     labels[name] = 1
-                elif fs and all(here.get(f) in ("error", "timeout", "refused") for f in fs):
+                elif fs and all(here.get(f) == "error" for f in fs):
                     labels[name] = 0
             if labels:
-                nodes.append((i, labels, observed.get(key)))
+                recorded = [n for p in props.get(key, [])
+                            for n in (p.get("cost") or {}).get("lemmas") or []
+                            if not LEMMA_NAME.fullmatch(n)]
+                nodes.append((i, labels, observed.get(key), recorded))
         if nodes:
             e = episodes[ep]
             out.append({"source": os.path.relpath(path, RUNS) if path.startswith(RUNS) else path,
                         "episode": ep, "statement": e["statement"], "preamble": e["preamble"],
-                        "proof": proof, "nodes": nodes})
+                        "policy": e["policy"]["id"], "proof": proof, "nodes": nodes})
     return out
 
 
 def replay(task, timeout=20):
     """Rows for one task, and what was dropped."""
-    rows, dropped = [], {"replay": 0, "not_in_pool": 0, "no_goal": 0, "goal_mismatch": 0}
-    nodes = {i: labels for i, labels, _ in task["nodes"]}
-    recorded = {i: goal for i, _, goal in task["nodes"]}
+    rows, dropped = [], {"replay": 0, "not_in_pool": 0, "no_goal": 0, "goal_mismatch": 0,
+                         "top6_mismatch_nodes": 0}
+    nodes = {i: labels for i, labels, _, _ in task["nodes"]}
+    recorded = {i: goal for i, _, goal, _ in task["nodes"]}
+    offered = {i: names for i, _, _, names in task["nodes"]}
+    # B's own records (no slot rule): the recorded lemmas should be the head of
+    # the recomputed list; a ranker's records offer other lemmas by design
+    plain = not any(t in task["policy"] for t in ("ranker/", "placebo/", "interleave/"))
     try:
         s = open_session(task["preamble"], task["statement"], backend="coqtop")
     except Exception:
@@ -123,6 +131,8 @@ def replay(task, timeout=20):
                     g = obs.goals[0]
                     found = retriever.lemmas(s, terms(g.conclusion, g.hypotheses))
                     where = {n: k for k, (n, _) in enumerate(found)}
+                    if plain and offered[i] != [n for n, _ in found[: len(offered[i])]]:
+                        dropped["top6_mismatch_nodes"] += 1
                     for name, label in sorted(labels.items()):
                         if name not in where:
                             dropped["not_in_pool"] += 1
@@ -176,13 +186,14 @@ def main(argv=None):
             if k % 25 == 0:
                 print(f"  {k}/{len(tasks)} episodes, {len(rows)} rows", flush=True)
     rows.sort(key=lambda r: (r["source"], r["episode"], r["depth"], r["lemma"]))
-    unique, keys = [], set()
+    unique, labels_of = [], {}
     for r in rows:
         k = (statement_key(r["statement"]), json.dumps(r["goal"]), r["lemma"])
-        if k not in keys:
-            keys.add(k)
+        if k not in labels_of:
             unique.append(r)
+        labels_of.setdefault(k, set()).add(r["label"])
     dropped["repeated"] = len(rows) - len(unique)
+    dropped["repeated_with_disagreeing_labels"] = sum(len(v) > 1 for v in labels_of.values())
     rows = unique
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "w") as fh:

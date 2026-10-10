@@ -1,9 +1,16 @@
-# RSI target 2: does the prover improve from its own output? (DPO, then expert iteration)
+# RSI target 2: does the prover improve from its own output? (DPO)
 
-Written: 2026-10-11
-Status: **draft, not frozen.** It's frozen into a `PROTOCOL.md` amendment (v6) after
-target 1 reports and before any model call. The pipeline refuses model runs without
-that amendment. No A100 time is spent before then.
+Written: 2026-10-10
+Status: **draft, not frozen.** It runs only if target 1 reads (i) or (iv) (see Order). If
+it runs, it's frozen after target 1 reports and before any model call on P or `test`, and
+its numbers go into the next `PROTOCOL.md` amendment. The pipeline refuses model runs
+without that amendment. No A100 time is spent before target 1 reports.
+
+Seeking-layer work: the policy's learning step, trained on its own kernel-judged search
+trees. Nothing in the truth layer changes.
+
+Review: the adversarial review of 2026-10-10 (63 findings, none refuted) left an edit plan
+for this file. That plan is applied here only if the target runs.
 
 ## What it answers, and what it doesn't
 
@@ -124,11 +131,15 @@ didn't (alone and with retrieval combined), or the budget runs out, the loop sto
   total stays within a ceiling the project owner sets. If after 10% of an iteration the
   projection exceeds the ceiling, the run stops and is reported as incomplete.
 
-## Order
+## Order (the owner's decision, 2026-10-10, also fixed in target 1's frozen text)
 
-Target 1 (`docs/rsi-target1-ranker.md`) reports first. It runs in condition B's setting,
-the library retrieval that condition D wraps around M1.
-- **If it shows ranking is a binding limit,** this target's retrieval condition uses
-  the learned ranker (D with the last ranker that passed target 1's stopping rule), so
-  DPO is measured against the stronger baseline.
-- **If it shows the limit is elsewhere,** D stays as registered.
+Target 1 (`docs/rsi-target1-ranker.md`) reports first. It measures ranking for the fixed
+tactics, in condition B's setting, on retrieval/v2. What it shows about M1 inside D is an
+assumption.
+- **After target 1, the pattern extractor is the main line of work.** This target runs
+  behind it, and only if target 1 reads (i) "ranking is a limit" or (iv) "ranking gains are
+  bounded".
+- **Under (i),** D as registered stays primary, and D with target 1's R3 (retrieval/v2) is a
+  registered secondary arm at iteration 0 and at every iteration.
+- **Under (iv),** D as registered.
+- **Under (ii), (iii) or (v),** this target doesn't run in this form.

@@ -26,80 +26,17 @@ import glob
 import json
 import os
 import random
-import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from itertools import permutations  # noqa: E402
-
 from proventhru.cli import _statements  # noqa: E402
-from proventhru.conjecture import VARS, parse_statement  # noqa: E402
+from proventhru.keys import key, twin_key  # noqa: E402,F401
 from proventhru.gate import classify  # noqa: E402
 from proventhru.protocol import statements_sha256  # noqa: E402
 
 HERE = os.path.join(os.path.dirname(__file__), "..")
 V5_SETS = ["examples/eval_test.txt", "examples/eval_test_renamed.txt", "examples/eval_open.txt"]
-BINDER = re.compile(r"\(([^():]+):\s*([^()]+)\)")
-
-
-def key(statement):
-    """The statement up to bound variable names: binders read off the
-    forall, variables renamed by type in order of first use in the body."""
-    s = " ".join(statement.split())
-    types = {}
-    m = re.match(r"forall\s+((?:\([^()]*\)\s*)+),\s*(.*)$", s)
-    if m:
-        for names, ty in BINDER.findall(m.group(1)):
-            for v in names.split():
-                types[v] = " ".join(ty.split())
-    else:
-        m = re.match(r"forall\s+([^,:()]+?)\s*:\s*([^,()]+?)\s*,\s*(.*)$", s)
-        if not m:
-            return s
-        for v in m.group(1).split():
-            types[v] = m.group(2)
-    body, count, ren = m.groups()[-1], {}, {}
-    for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_']*", body):
-        if tok in types and tok not in ren:
-            ty = types[tok]
-            count[ty] = count.get(ty, 0) + 1
-            ren[tok] = f"<{ty}#{count[ty]}>"
-    body = re.sub(r"[A-Za-z_][A-Za-z0-9_']*", lambda t: ren.get(t.group(0), t.group(0)), body)
-    return body
-
-
-COMMUTATIVE = {"add", "mul", "max", "min"}
-
-
-def _canon(t, ren):
-    if t.op in VARS:
-        return ren.get(t.op, t.op)
-    args = [_canon(a, ren) for a in t.args]
-    if t.op in COMMUTATIVE:
-        args.sort()
-    return f"{t.op}({','.join(args)})"
-
-
-def twin_key(statement):
-    """The statement up to bound names, variable permutation and the
-    commutativity of add, mul, max and min; key() when it doesn't parse."""
-    try:
-        lhs, rhs, rel = parse_statement(statement)
-    except Exception:
-        return "?" + key(statement)
-    names = sorted(VARS)
-    best = None
-    lists = [v for v in names if VARS[v] == "list nat"]
-    nats = [v for v in names if VARS[v] == "nat"]
-    for pl in permutations(lists):
-        for pn in permutations(nats):
-            ren = dict(zip(lists, pl)) | dict(zip(nats, pn))
-            k = f"{_canon(lhs, ren)} {rel.strip()} {_canon(rhs, ren)}"
-            best = k if best is None or k < best else best
-    return best
-
-
 def record_statements(paths):
     out = set()
     for p in paths:
