@@ -284,6 +284,113 @@ proventhru run examples/eval_open.txt --out out/dev-C --budget 0 --step-budget 6
 proventhru report out/A600/records.jsonl out/C600/records.jsonl
 ```
 
+## The conjecture loop: proving what nobody asked for
+
+`proventhru explore` is the discovery half.
+
+**What it does and doesn't do yet.** It proposes, gates, proves and keeps lemmas, and
+generalizes them. It doesn't yet compose them:
+- 70 of run 7's 176 open statements follow from chains of corpus lemmas the prover never
+  combines;
+- inner citations (a discovered lemma used after an induction or case split) are zero
+  in every run so far;
+- the next step is saturation as a prover step, judged by the definitions in
+  `docs/conjecture-metrics.md` (written before it exists);
+- the lemmas are about lists and arithmetic, novel relative to the library and the
+  corpus, not to mathematics.
+
+In each round it:
+
+1. **generates** candidates over the stdlib `nat` / `list nat` signature
+   (`proventhru/conjecture.py`, the same QuickSpec-style enumerator that built
+   the held-out set), smallest first. Two differences from the eval sets'
+   generator, which is unchanged (`tools/make_eval.py`'s output is
+   byte-identical):
+   - `f(x) R f(y)` is dropped only when `x` and `y` are equal on every input.
+     The eval rule drops every such pair, and with it every monotonicity
+     lemma (`list_max (removelast l) <= list_max l`);
+   - `--signature wide` adds `nth`, `last` and `count_occ`, and `--new-only`
+     keeps only candidates that use them;
+2. **tests** each one on 2,000 random inputs and 1,000 wide ones (values up to
+   100, lists up to 12; small values let false bounds through), and drops instances of laws
+   over `nat` alone: `0 * list_sum l = 0` is `0 * a = 0`, which is true of any
+   number, so it says nothing about lists. The drops are certified: each one's
+   law over `nat` is proved by `lia`/`nia` every round, and a candidate whose
+   law is not proved goes back to the prover;
+3. records **derivations**: a candidate that `pose proof (L a); lia` closes
+   with one lemma `L` found earlier, at the goal's variables or its subterms
+   (`L (map S l1)`), is kept as a derivation citing `L`, not as a new lemma;
+4. **gates** the rest. Trivial now also means closed by one discovered lemma;
+5. **proves** what is open with half the step budget on fixed tactics, then
+   half on fixed tactics + retrieval for what is left. `--prover structural`
+   adds three proof shapes the fixed tactics can't reach: a case on the tail
+   in the step case, a case on an `if`, and a number reverted before
+   induction (`structural-tactics/v1`; the registered `fixed-tactics/v1` is
+   unchanged). Retrieval has two indexes:
+   - **library:** Coq's `Search`, with discovered lemmas filtered out so an
+     instance can't hide the library lemma a proof needs;
+   - **corpus:** a discovered lemma is retrieved when everything it mentions is
+     in the goal, and offered first, as `pose proof (L x); lia`;
+6. **keeps** kernel-certified proofs smallest first. One that follows from a
+   lemma admitted before it, from the same round included, is a derivation.
+   The rest become `Lemma pt_rN_k` in the corpus, in the preamble of every
+   later round. `Print Assumptions` must report every corpus lemma closed
+   under the global context;
+7. **seeds** the next round from what it found (LEGO-Prover's evolver in
+   small). Each new statement is anti-unified with every one found so far.
+   Two instances such as `list_sum (l1 ++ rev l1)` and `list_sum (l1 ++ l1)`
+   propose `list_sum (l1 ++ l2)`. Each one's subterms are also generalized
+   to fresh variables. Seeds that pass testing take up to half of the next
+   round. A statement left open earlier may come back as a seed: the corpus
+   has grown since, so that's how it gets retried.
+
+The whole corpus is recompiled from scratch after every round. The held-out
+and dev statements are excluded (`--exclude`), so the corpus can't leak into
+an evaluation. "Novel" means not closed by one tactic, one library lemma, or
+one discovered lemma plus arithmetic. It is novelty relative to the library
+and the corpus, not to mathematics.
+
+```sh
+proventhru explore --out out/explore --rounds 6 --per-round 80 --step-budget 600 --jobs 4 \
+    --prover structural \
+    --exclude examples/eval_test.txt --exclude examples/eval_test_renamed.txt \
+    --exclude examples/eval_open.txt
+```
+
+A run can change signature between rounds: rerun with more rounds and
+`--signature wide`. Rounds done under the old signature don't replay the new
+stream.
+
+Outputs:
+- `corpus.v` compiles on its own;
+- `corpus.jsonl` lists each lemma's proof, prover, round, and the discovered lemmas it cites;
+- `round-N/derived.jsonl` lists the derivations, each with the lemmas it cites;
+- `rounds.jsonl` holds per-round counts (gate, derived, proved, citing, and
+  `uses_of_corpus`, every place a discovered lemma did work) and the record heads;
+- `round-N/` holds the run records.
+
+`python tools/explore_report.py OUT` shows where the corpus did work, round by
+round. It splits citations inside proofs into top-level ones, and inner ones that
+come after an induction or case split, at a subgoal the statement doesn't show. Inner
+citations are the sign that the loop deepens, not just closes.
+
+`python tools/classify_opens.py OUT` asks why the open statements stayed open.
+Each one is tried against a ladder of scripted proofs, with the final corpus
+loaded:
+- **1:** in the prover's class, missed by search;
+- **1r:** the same, needing a lemma found later;
+- **2:** two corpus lemmas, or one inside an induction;
+- **2s:** a chain of corpus lemmas, by saturation;
+- **3v:** tactics the prover lacks;
+- **F:** false on wider inputs;
+- **3:** unexplained.
+
+Every class but 3 comes with a closing script checked by Coq. This is how the
+congruence filter and the missing tactic shapes were found
+(`results/explore-runs-5-7.md`).
+
+It runs on CPU and needs no model.
+
 ## What is not built yet
 
 - **Reflection (grounded critique).** v2, once v1 has a measured baseline;

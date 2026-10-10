@@ -2,6 +2,7 @@
 protocol check, resume, the report's failure classes and McNemar, and the
 eval-set generator."""
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -374,6 +375,210 @@ class TestNullary(unittest.TestCase):
         self.assertIsNone(assemble("induction", " ")[0])
         self.assertEqual(assemble("intros", "")[0], "intros.")
         self.assertEqual(assemble("simpl", "in IHl")[0], "simpl in IHl.")
+
+
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestExplore(unittest.TestCase):
+    def test_a_proved_lemma_joins_the_corpus_and_its_instances_are_not_new(self):
+        from proventhru import record as rec
+        from proventhru.explore import explore
+        lemma = "forall l : list nat, length (rev (l ++ l)) = 2 * length l"
+        instance = "forall l : list nat, length (rev (map S l ++ map S l)) = 2 * length (map S l)"
+        excluded = "forall n : nat, n + 0 = n"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=2, per_round=1, step_budget=600,
+                                     statements=[lemma, instance, excluded],
+                                     exclude={excluded}, log=lambda *_: None)
+            self.assertEqual([c["statement"] for c in corpus], [lemma])
+            self.assertEqual(corpus[0]["name"], "pt_r0_0")
+            self.assertEqual(rounds[0]["proved"], 1)
+            self.assertEqual(rounds[1]["known_by_corpus"], 1)      # an instance is not new
+            self.assertEqual(rounds[1]["proved"], 0)
+            with open(os.path.join(out, "corpus.v")) as fh:
+                self.assertIn("Lemma pt_r0_0 : " + lemma + ".", fh.read())
+            r1 = rec.load(os.path.join(out, "round-1", "fixed", "records.jsonl"))
+            self.assertEqual(rec.verify(r1), [])
+            self.assertIn("pt_r0_0", r1[0]["data"]["preamble"])    # round 1 saw the corpus
+            # resuming does nothing new
+            again, rounds2 = explore(out, rounds=2, per_round=1, step_budget=600,
+                                     statements=[lemma, instance], log=lambda *_: None)
+            self.assertEqual(len(again), 1)
+            self.assertEqual(len(rounds2), 2)
+
+    def test_the_candidate_stream_is_deterministic_and_excludes(self):
+        from proventhru.explore import candidate_stream
+        a = [s for _, s in zip(range(10), candidate_stream(2, 4, 4, 7))]
+        b = [s for _, s in zip(range(10), candidate_stream(2, 4, 4, 7, exclude={a[0]}))]
+        self.assertEqual(a, [s for _, s in zip(range(10), candidate_stream(2, 4, 4, 7))])
+        self.assertNotIn(a[0], b)
+
+    def test_instances_of_nat_laws_are_dropped_and_list_laws_kept(self):
+        import random
+        from proventhru.conjecture import Term, nat_instance
+        T = Term
+        l, n = T("l1"), T("n")
+        rng = random.Random(0)
+        # 0 * list_sum l = 0 is 0 * a = 0; list_max l - n <= list_max l is a - n <= a
+        self.assertTrue(nat_instance(T("mul", [T("0"), T("sum", [l])]), T("0"), "=", rng))
+        self.assertTrue(nat_instance(T("sub", [T("lmax", [l]), n]), T("lmax", [l]), "<=", rng))
+        # list_max l <= list_sum l is about lists; so is length (rev l) = length l
+        self.assertFalse(nat_instance(T("lmax", [l]), T("sum", [l]), "<=", rng))
+        self.assertFalse(nat_instance(T("length", [T("rev", [l])]), T("length", [l]), "=", rng))
+        # a list-typed law is never abstracted
+        self.assertFalse(nat_instance(T("rev", [T("rev", [l])]), l, "=", rng))
+
+    def test_an_arithmetic_corollary_of_the_corpus_is_set_aside(self):
+        from proventhru.explore import explore
+        lemma = "forall (l1 : list nat), list_max l1 <= list_sum l1"
+        weaker = "forall (l1 : list nat) (n : nat), (list_max l1) - n <= list_sum l1"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=2, per_round=1, step_budget=600,
+                                     statements=[lemma, weaker], log=lambda *_: None)
+            self.assertEqual([c["statement"] for c in corpus], [lemma])
+            self.assertEqual(rounds[1]["derived_before_gate"], 1)
+            with open(os.path.join(out, "round-1", "derived.jsonl")) as fh:
+                d = json.loads(fh.readline())
+            self.assertEqual(d["script"], "intros; pose proof (pt_r0_0 l1); lia.")
+            self.assertEqual(d["cites"], ["pt_r0_0"])
+
+    def test_a_lemma_that_follows_from_a_smaller_one_of_its_round_is_derived(self):
+        from proventhru.explore import explore
+        lemma = "forall (l1 : list nat), list_max l1 <= list_sum l1"
+        weaker = "forall (l1 : list nat) (n : nat), (list_max l1) - n <= list_sum l1"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=1, per_round=2, step_budget=600,
+                                     statements=[weaker, lemma], log=lambda *_: None)
+            self.assertEqual([c["statement"] for c in corpus], [lemma])
+            self.assertEqual(rounds[0]["derived_after_proof"], 1)
+
+    def test_number_only_drops_are_certified_and_a_false_one_goes_back(self):
+        from proventhru.explore import candidate_stream, certify_drops
+        stats = {}
+        list(zip(range(40), candidate_stream(2, 4, 3, 6, stats=stats)))
+        self.assertTrue(stats["nat_forms"])
+        self.assertEqual(certify_drops(stats["nat_forms"]), [])
+        self.assertEqual(certify_drops([("x", "forall (a0 n : nat), a0 - n <= n")]), ["x"])
+
+    def test_citations_are_classified_by_position(self):
+        from proventhru.explore import citation_sites
+        self.assertEqual(citation_sites(["intros; pose proof (pt_r0_0 l1); lia."]),
+                         [{"lemma": "pt_r0_0", "index": 0, "inner": False}])
+        self.assertEqual(citation_sites(["intros.", "induction l1.", "simpl.",
+                                         "pose proof (pt_r1_2 l1); lia."]),
+                         [{"lemma": "pt_r1_2", "index": 3, "inner": True}])
+        self.assertEqual(citation_sites(["apply pt_r9_9."], names={"pt_r0_0"}), [])
+
+    def test_statements_read_back_and_two_instances_anti_unify(self):
+        import random
+        from proventhru.conjecture import (EDGE, anti_unify, candidates, canonical_names,
+                                           enumerate_classes, parse_statement, random_env,
+                                           statement)
+        rng = random.Random(2)
+        classes = enumerate_classes(4, EDGE + [random_env(rng) for _ in range(30)])
+        for c in candidates(classes, 3, 7)[:800]:
+            s = statement(*c, canonical_names(c[0], c[1]))
+            self.assertEqual(statement(*parse_statement(s)), s)
+        a = parse_statement("forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (removelast l1))")
+        b = parse_statement("forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (filter Nat.even l1))")
+        g = anti_unify(a, b)
+        self.assertEqual(statement(*g, canonical_names(g[0], g[1])),
+                         "forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)")
+        self.assertIsNone(anti_unify(a, parse_statement("forall (l1 : list nat), rev (rev l1) = l1")))
+
+    def test_a_seed_from_two_instances_is_proved_as_their_generalization(self):
+        from proventhru.explore import explore
+        base = "forall (l1 : list nat), list_max l1 <= list_sum l1"
+        other = "forall (l1 : list nat), rev (rev l1) = l1"
+        i1 = "forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (removelast l1))"
+        i2 = "forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (filter Nat.even l1))"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=3, per_round=2, step_budget=600,
+                                     statements=[base, other, i1, i2], log=lambda *_: None)
+            general = [c for c in corpus if c["source"] == "seed:anti_unify"]
+            self.assertEqual([c["statement"] for c in general],
+                             ["forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)"])
+            self.assertEqual(rounds[1]["seeds_proposed"], 1)
+            self.assertEqual(rounds[2]["proved_from_seeds"], 1)
+            self.assertTrue(all(r["axiom_free"] for r in rounds))
+            # resuming replays the queue and adds nothing
+            again, _ = explore(out, rounds=3, per_round=2, step_budget=600,
+                               statements=[base, other, i1, i2], log=lambda *_: None)
+            self.assertEqual(len(again), len(corpus))
+
+    def test_print_assumptions_finds_an_axiom(self):
+        from unittest import mock
+        from proventhru import explore as ex
+        ok = [{"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1",
+               "proof": ["intros.", "induction l1.", "reflexivity.", "simpl.", "lia."]}]
+        self.assertEqual(ex.axioms(ok), {})
+        bad = [{"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1",
+                "proof": ["exact ax."]}]
+        with mock.patch.object(ex, "BASE", ex.BASE + " Axiom ax : forall l1 : list nat, "
+                                                    "list_max l1 <= list_sum l1."):
+            self.assertEqual(ex.axioms(bad), {"pt_r0_0": ["ax"]})
+
+    def test_an_instance_of_a_corpus_lemma_is_derived_not_new(self):
+        from proventhru.explore import corollary, preamble
+        c = [{"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1",
+              "proof": ["intros.", "induction l1.", "reflexivity.", "simpl.", "lia."]}]
+        inst = "forall (l1 : list nat) (n : nat), list_max (map S l1) <= n + (list_sum (map S l1))"
+        self.assertEqual(corollary(inst, preamble(c), c),
+                         "intros; pose proof (pt_r0_0 (map S l1)); lia.")
+        general = "forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)"
+        self.assertIsNone(corollary(general, preamble(c), c))
+
+    def test_the_wide_signature_adds_nth_last_count_occ_and_reads_back(self):
+        from proventhru.conjecture import parse_statement, statement
+        from proventhru.explore import candidate_stream
+        base = [s for _, s in zip(range(30), candidate_stream(2, 4, 3, 6))]
+        wide = [s for _, s in zip(range(30), candidate_stream(2, 4, 3, 6, signature="wide",
+                                                              require=("nth", "last", "count")))]
+        new = re.compile(r"\b(nth|last|count_occ)\b")      # not removelast
+        self.assertFalse(any(new.search(s) for s in base))
+        self.assertTrue(wide and all(new.search(s) for s in wide))
+        for s in wide:
+            self.assertEqual(statement(*parse_statement(s)), s)
+
+    def test_exploration_keeps_monotonicity_lemmas_the_eval_filter_drops(self):
+        from proventhru.explore import candidate_stream
+        mono = "forall (l1 : list nat), list_max (removelast l1) <= list_max l1"
+        explore = [s for _, s in zip(range(60), candidate_stream(2, 4, 3, 6))]
+        self.assertIn(mono, explore)
+        import random
+        from proventhru.conjecture import (EDGE, candidates, canonical_names, enumerate_classes,
+                                           random_env, statement)
+        rng = random.Random(2)
+        classes = enumerate_classes(4, EDGE + [random_env(rng) for _ in range(40)])
+        evals = {statement(*c, canonical_names(c[0], c[1])) for c in candidates(classes, 3, 6)}
+        self.assertNotIn(mono, evals)       # the eval sets' rule, unchanged
+
+    def test_structural_tactics_prove_the_monotonicity_lemmas(self):
+        from proventhru import record as rec
+        from proventhru.explore import BASE, StructuralTactics
+        from proventhru.pipeline import RECORD, run
+        stmts = ["forall (l1 : list nat), list_max (removelast l1) <= list_max l1",
+                 "forall (l1 : list nat) (n : nat), list_sum (skipn n l1) <= list_sum l1",
+                 "forall (l1 : list nat), list_max (filter Nat.even l1) <= list_max l1"]
+        with tempfile.TemporaryDirectory() as out:
+            run(stmts, out, BASE, budget=None, step_budget=300, backend="coqtop",
+                log=lambda *_: None, policy_factory=StructuralTactics)
+            rows = rec.corpus(rec.load(os.path.join(out, RECORD)))
+        self.assertEqual([r["standing"] for r in rows], ["proved"] * 3)
+
+    def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
+        from types import SimpleNamespace as NS
+        from proventhru.explore import CorpusRetrievalPolicy
+        from proventhru.search import FixedTactics
+        pol = CorpusRetrievalPolicy(FixedTactics(), [
+            {"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1"}])
+        pol.retriever.lemmas = lambda *_: [("pt_r0_0", "forall l1 : list nat, ..."),
+                                           ("Nat.le_refl", "forall n : nat, n <= n")]
+        pol.env = NS(session=object())
+        goal = NS(conclusion="list_max l1 - n <= list_sum l1",
+                  hypotheses=["l1 : list nat", "n : nat"])
+        cands = [t for t, _ in pol.propose(NS(goals=[goal]), [])]
+        self.assertIn("pose proof (pt_r0_0 l1); lia.", cands)
+        self.assertNotIn("pose proof (Nat.le_refl n); lia.", cands)   # library lemmas: unchanged
 
 
 class Unavailable(RuntimeError):
