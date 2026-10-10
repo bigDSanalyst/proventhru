@@ -290,8 +290,16 @@ proventhru report out/A600/records.jsonl out/C600/records.jsonl
 
 1. **generates** candidates over the stdlib `nat` / `list nat` signature
    (`proventhru/conjecture.py`, the same QuickSpec-style enumerator that built
-   the held-out set), smallest first;
-2. **tests** each one on 2,000 random inputs, and drops instances of laws
+   the held-out set), smallest first. Two differences from the eval sets'
+   generator, which is unchanged (`tools/make_eval.py`'s output is
+   byte-identical):
+   - `f(x) R f(y)` is dropped only when `x` and `y` are equal on every input.
+     The eval rule drops every such pair, and with it every monotonicity
+     lemma (`list_max (removelast l) <= list_max l`);
+   - `--signature wide` adds `nth`, `last` and `count_occ`, and `--new-only`
+     keeps only candidates that use them;
+2. **tests** each one on 2,000 random inputs and 1,000 wide ones (values up to
+   100, lists up to 12; small values let false bounds through), and drops instances of laws
    over `nat` alone: `0 * list_sum l = 0` is `0 * a = 0`, which is true of any
    number, so it says nothing about lists. The drops are certified: each one's
    law over `nat` is proved by `lia`/`nia` every round, and a candidate whose
@@ -301,8 +309,11 @@ proventhru report out/A600/records.jsonl out/C600/records.jsonl
    (`L (map S l1)`), is kept as a derivation citing `L`, not as a new lemma;
 4. **gates** the rest. Trivial now also means closed by one discovered lemma;
 5. **proves** what is open with half the step budget on fixed tactics, then
-   half on fixed tactics + retrieval for what is left. Retrieval has two
-   indexes:
+   half on fixed tactics + retrieval for what is left. `--prover structural`
+   adds three proof shapes the fixed tactics can't reach: a case on the tail
+   in the step case, a case on an `if`, and a number reverted before
+   induction (`structural-tactics/v1`; the registered `fixed-tactics/v1` is
+   unchanged). Retrieval has two indexes:
    - **library:** Coq's `Search`, with discovered lemmas filtered out so an
      instance can't hide the library lemma a proof needs;
    - **corpus:** a discovered lemma is retrieved when everything it mentions is
@@ -327,10 +338,15 @@ one discovered lemma plus arithmetic. It is novelty relative to the library
 and the corpus, not to mathematics.
 
 ```sh
-proventhru explore --out out/explore --rounds 4 --per-round 80 --step-budget 600 --jobs 4 \
+proventhru explore --out out/explore --rounds 6 --per-round 80 --step-budget 600 --jobs 4 \
+    --prover structural \
     --exclude examples/eval_test.txt --exclude examples/eval_test_renamed.txt \
     --exclude examples/eval_open.txt
 ```
+
+A run can change signature between rounds: rerun with more rounds and
+`--signature wide`. Rounds done under the old signature don't replay the new
+stream.
 
 Outputs:
 - `corpus.v` compiles on its own;
@@ -344,6 +360,21 @@ Outputs:
 round. It splits citations inside proofs into top-level ones, and inner ones that
 come after an induction or case split, at a subgoal the statement doesn't show. Inner
 citations are the sign that the loop deepens, not just closes.
+
+`python tools/classify_opens.py OUT` asks why the open statements stayed open.
+Each one is tried against a ladder of scripted proofs, with the final corpus
+loaded:
+- **1:** in the prover's class, missed by search;
+- **1r:** the same, needing a lemma found later;
+- **2:** two corpus lemmas, or one inside an induction;
+- **2s:** a chain of corpus lemmas, by saturation;
+- **3v:** tactics the prover lacks;
+- **F:** false on wider inputs;
+- **3:** unexplained.
+
+Every class but 3 comes with a closing script checked by Coq. This is how the
+congruence filter and the missing tactic shapes were found
+(`results/explore-runs-5-7.md`).
 
 It runs on CPU and needs no model.
 
