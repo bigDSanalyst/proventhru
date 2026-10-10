@@ -467,6 +467,65 @@ class TestExplore(unittest.TestCase):
                          [{"lemma": "pt_r1_2", "index": 3, "inner": True}])
         self.assertEqual(citation_sites(["apply pt_r9_9."], names={"pt_r0_0"}), [])
 
+    def test_statements_read_back_and_two_instances_anti_unify(self):
+        import random
+        from proventhru.conjecture import (EDGE, anti_unify, candidates, canonical_names,
+                                           enumerate_classes, parse_statement, random_env,
+                                           statement)
+        rng = random.Random(2)
+        classes = enumerate_classes(4, EDGE + [random_env(rng) for _ in range(30)])
+        for c in candidates(classes, 3, 7)[:800]:
+            s = statement(*c, canonical_names(c[0], c[1]))
+            self.assertEqual(statement(*parse_statement(s)), s)
+        a = parse_statement("forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (removelast l1))")
+        b = parse_statement("forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (filter Nat.even l1))")
+        g = anti_unify(a, b)
+        self.assertEqual(statement(*g, canonical_names(g[0], g[1])),
+                         "forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)")
+        self.assertIsNone(anti_unify(a, parse_statement("forall (l1 : list nat), rev (rev l1) = l1")))
+
+    def test_a_seed_from_two_instances_is_proved_as_their_generalization(self):
+        from proventhru.explore import explore
+        base = "forall (l1 : list nat), list_max l1 <= list_sum l1"
+        other = "forall (l1 : list nat), rev (rev l1) = l1"
+        i1 = "forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (removelast l1))"
+        i2 = "forall (l1 : list nat), list_max l1 <= list_sum (l1 ++ (filter Nat.even l1))"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=3, per_round=2, step_budget=600,
+                                     statements=[base, other, i1, i2], log=lambda *_: None)
+            general = [c for c in corpus if c["source"] == "seed:anti_unify"]
+            self.assertEqual([c["statement"] for c in general],
+                             ["forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)"])
+            self.assertEqual(rounds[1]["seeds_proposed"], 1)
+            self.assertEqual(rounds[2]["proved_from_seeds"], 1)
+            self.assertTrue(all(r["axiom_free"] for r in rounds))
+            # resuming replays the queue and adds nothing
+            again, _ = explore(out, rounds=3, per_round=2, step_budget=600,
+                               statements=[base, other, i1, i2], log=lambda *_: None)
+            self.assertEqual(len(again), len(corpus))
+
+    def test_print_assumptions_finds_an_axiom(self):
+        from unittest import mock
+        from proventhru import explore as ex
+        ok = [{"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1",
+               "proof": ["intros.", "induction l1.", "reflexivity.", "simpl.", "lia."]}]
+        self.assertEqual(ex.axioms(ok), {})
+        bad = [{"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1",
+                "proof": ["exact ax."]}]
+        with mock.patch.object(ex, "BASE", ex.BASE + " Axiom ax : forall l1 : list nat, "
+                                                    "list_max l1 <= list_sum l1."):
+            self.assertEqual(ex.axioms(bad), {"pt_r0_0": ["ax"]})
+
+    def test_an_instance_of_a_corpus_lemma_is_derived_not_new(self):
+        from proventhru.explore import corollary, preamble
+        c = [{"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1",
+              "proof": ["intros.", "induction l1.", "reflexivity.", "simpl.", "lia."]}]
+        inst = "forall (l1 : list nat) (n : nat), list_max (map S l1) <= n + (list_sum (map S l1))"
+        self.assertEqual(corollary(inst, preamble(c), c),
+                         "intros; pose proof (pt_r0_0 (map S l1)); lia.")
+        general = "forall (l1 l2 : list nat), list_max l1 <= list_sum (l1 ++ l2)"
+        self.assertIsNone(corollary(general, preamble(c), c))
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy

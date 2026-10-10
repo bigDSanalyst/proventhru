@@ -24,3 +24,17 @@ So the registered B is not understated by its tactic forms, at least on dev. If
 retrieval is to improve, the lever is the ranking: by what the lemma's conclusion shares
 with the goal's, not by any mention, or retrieving similar proofs, as Rango does. That
 would be a new condition and would need an amendment before any test-set run.
+
+## Three retrieval failures, three levers
+
+This check and the exploration runs found three different ways a lemma fails to reach a
+proof. Each needs a different fix:
+
+| failure | where | what fails | the lever |
+|---|---|---|---|
+| ranking | library lemmas in B (this check) | the top-ranked lemmas are unrelated to the step (`Nat.even_0` for a goal mentioning `Nat.even`) | ranking; no tactic form helps |
+| form | discovered lemmas (exploration run 3) | the right lemma is found, but offered only as `apply`, and it's a step inside arithmetic | `pose proof (L x); lia` |
+| crowding | discovered lemmas (seeding) | `Search` returns only lemmas that mention every goal term, so corpus instances (`list_sum (l1 ++ rev l1)`) hide both the base lemma (`list_max l <= list_sum l`) and the library lemma (`list_sum_app`) the proof needs | separate indexes: library `Search` without the corpus, and a corpus index that retrieves a lemma when everything it mentions is in the goal |
+
+The same change, the `pose proof` form, helps the second case and does nothing for the
+first. Measure which failure you have before choosing the lever.

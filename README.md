@@ -296,18 +296,29 @@ proventhru report out/A600/records.jsonl out/C600/records.jsonl
    number, so it says nothing about lists. The drops are certified: each one's
    law over `nat` is proved by `lia`/`nia` every round, and a candidate whose
    law is not proved goes back to the prover;
-3. records **derivations**: a candidate that `pose proof (L l1); lia` closes
-   with one lemma `L` found earlier is kept as a derivation citing `L`, not as
-   a new lemma;
+3. records **derivations**: a candidate that `pose proof (L a); lia` closes
+   with one lemma `L` found earlier, at the goal's variables or its subterms
+   (`L (map S l1)`), is kept as a derivation citing `L`, not as a new lemma;
 4. **gates** the rest. Trivial now also means closed by one discovered lemma;
 5. **proves** what is open with half the step budget on fixed tactics, then
-   half on fixed tactics + retrieval for what is left. Discovered lemmas are
-   in the preamble, so Coq's `Search` retrieves them like library lemmas, and
-   each one retrieved is also offered as `pose proof (L x); lia`;
+   half on fixed tactics + retrieval for what is left. Retrieval has two
+   indexes:
+   - **library:** Coq's `Search`, with discovered lemmas filtered out so an
+     instance can't hide the library lemma a proof needs;
+   - **corpus:** a discovered lemma is retrieved when everything it mentions is
+     in the goal, and offered first, as `pose proof (L x); lia`;
 6. **keeps** kernel-certified proofs smallest first. One that follows from a
    lemma admitted before it, from the same round included, is a derivation.
    The rest become `Lemma pt_rN_k` in the corpus, in the preamble of every
-   later round.
+   later round. `Print Assumptions` must report every corpus lemma closed
+   under the global context;
+7. **seeds** the next round from what it found (LEGO-Prover's evolver in
+   small). Each new statement is anti-unified with every one found so far.
+   Two instances such as `list_sum (l1 ++ rev l1)` and `list_sum (l1 ++ l1)`
+   propose `list_sum (l1 ++ l2)`. Each one's subterms are also generalized
+   to fresh variables. Seeds that pass testing take up to half of the next
+   round. A statement left open earlier may come back as a seed: the corpus
+   has grown since, so that's how it gets retried.
 
 The whole corpus is recompiled from scratch after every round. The held-out
 and dev statements are excluded (`--exclude`), so the corpus can't leak into

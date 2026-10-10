@@ -5,6 +5,19 @@ part of proventhru it bears on. Collected October 2026. Each entry says what
 we take from the work, or where we differ. The figures are as the papers
 report them; papers with more than one version are noted.
 
+## At a glance: what we take
+
+| work | what we take | status here |
+|---|---|---|
+| QuickSpec / HipSpec / Hipster | test-then-prove theory exploration; proved lemmas feed later proofs | the loop's design |
+| QuickSpec's pruning | skip terms a known lemma rewrites, before testing | not yet; we prune after proof, by derivation |
+| LEGO-Prover's evolver | generalize discovered lemmas and re-gate them | built: seeding by anti-unification and subterm generalization |
+| Lemmanaid | the model proposes lemma shapes, symbolic search fills them | the first model-in-the-generator step, when we get there |
+| STP / Minimo / UseFor | reward conjectures just within reach, or useful to later proofs | measurable from the records (`uses_of_corpus`), not yet used as reward |
+| LeanConjecturer | self-play collapses onto few topics | measure generator coverage before a model generates |
+| Rango | retrieve similar proofs, not just lemma names | a candidate B variant; needs an amendment for test |
+| Lean skill files | a result counts only with no `sorry` and no axioms | built: `Print Assumptions` on every corpus lemma |
+
 ## Theory exploration: the ancestor of `proventhru explore`
 
 - **QuickSpec, HipSpec, Hipster, TheSy.**
@@ -118,6 +131,5 @@ All the maintained ones found are for Lean 4. None was found for Rocq.
 - **smithery lean4-theorem-proving**: a result counts only when the build
   passes, with zero `sorry` and zero custom axioms.
   [Listing](https://www.skills.sh/site/smithery.ai/lean4-theorem-proving).
-  - **Us:** worth adopting as an explicit check. Run `Print Assumptions` on
-    every corpus lemma, so that "kernel-certified" also means "closed under
-    the standard library, no axioms".
+  - **Us:** adopted. `explore` runs `Print Assumptions` on every corpus
+    lemma each round and stops if any rests on an axiom.

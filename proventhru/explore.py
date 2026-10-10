@@ -55,17 +55,19 @@ import time
 from collections import Counter
 
 from . import record as rec
-from .conjecture import (EDGE, L, N, canonical_names, candidates, enumerate_classes, holds,
-                         nat_abstraction, nat_instance, random_env, statement)
+from .conjecture import (EDGE, L, N, VARS, anti_unify, canonical_names, candidates,
+                         constant_list, enumerate_classes, _subterms, generalize, holds, nat_abstraction,
+                         nat_instance, parse_statement, random_env, statement)
 from .env import DEFAULT_PREAMBLE
 from .pipeline import RECORD, run
-from .retrieval import RetrievalPolicy
+from .retrieval import Retriever, RetrievalPolicy, terms
 from .search import FixedTactics
 from .gate import _first_closing
 from .session import open_session
 
 BASE = DEFAULT_PREAMBLE + " Import ListNotations."
 LEMMA_NAME = re.compile(r"\bpt_r\d+_\d+\b")
+VARS_TYPE = {v: ("list" if ty == L else "nat") for v, ty in VARS.items()}
 BINDER = re.compile(r"\(([\w ]+) : (list nat|nat)\)")
 
 
@@ -75,17 +77,39 @@ def binders(stmt):
     return [(v, ty) for vs, ty in BINDER.findall(head) for v in vs.split()]
 
 
-def corollary_tactics(stmt, corpus):
-    """intros; pose proof (L x y); lia for every corpus lemma L and every
-    way to fill its binders with the goal's variables of the same type: a
-    statement that this closes follows from a lemma already found by
-    arithmetic alone (list_max l - n <= list_sum l from list_max l <=
-    list_sum l), so it is not new."""
-    goal = binders(stmt)
+def _goal_terms(stmt):
+    """{type: [terms]}: the goal's variables, then its non-variable list and
+    nat subterms (map S l1, list_sum l1), as Coq text."""
+    out = {L: [], N: []}
+    for v, ty in binders(stmt):
+        out[ty].append(v)
+    try:
+        lhs, rhs, _ = parse_statement(stmt)
+    except (ValueError, AssertionError, IndexError, TypeError):
+        return out
+    for t in list(_subterms(lhs)) + list(_subterms(rhs)):
+        if t.op not in VARS and t.vars():
+            text = f"({t.coq()})"
+            if text not in out[t.type]:
+                out[t.type].append(text)
+    return out
+
+
+def corollary_tactics(stmt, corpus, limit=12):
+    """intros; pose proof (L a ..); lia for every corpus lemma L, its binders
+    filled with the goal's variables and then its subterms of the same type,
+    at most `limit` ways per lemma: a statement this closes follows from a
+    lemma already found by arithmetic, at a variable (list_max l - n <=
+    list_sum l from list_max l <= list_sum l) or at an instance (list_max
+    (map S l) <= n + list_sum (map S l), the same lemma at map S l)."""
+    goal = _goal_terms(stmt)
+    mentions = lemma_terms(stmt)
     for c in corpus:
+        if not lemma_terms(c["statement"]) <= mentions:     # cannot be the step
+            continue
         need = binders(c["statement"])
-        pools = [[v for v, ty in goal if ty == t] for _, t in need]
-        for args in itertools.product(*pools):
+        pools = [goal[t] for _, t in need]
+        for args in itertools.islice(itertools.product(*pools), limit):
             yield f"intros; pose proof ({' '.join((c['name'],) + args)}); lia."
 
 
@@ -100,38 +124,77 @@ def hypothesis_vars(hypotheses):
     return out
 
 
-class CorpusRetrievalPolicy(RetrievalPolicy):
-    """Retrieval (B), and for each discovered lemma among the lemmas Search
-    retrieved for this goal, also `pose proof (L x ..); lia` with the goal's
-    variables: apply only closes a goal the lemma matches exactly, and a
-    discovered inequality is mostly used inside arithmetic. Only retrieved
-    lemmas get the form, so the candidates grow with what the goal mentions,
-    not with the size of the corpus."""
+class LibraryRetriever(Retriever):
+    """Coq's Search with the discovered lemmas taken out, so they do not
+    stand in for the library: Search returns only lemmas that mention every
+    goal term, and an instance in the corpus (list_sum (l1 ++ rev l1)) does,
+    which hides the library lemma the proof needs (list_sum_app)."""
 
-    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3):
+    @staticmethod
+    def _search(session, ts):
+        return [e for e in Retriever._search(session, ts) if not LEMMA_NAME.fullmatch(e[0])]
+
+
+def lemma_terms(stmt):
+    """The constants and operators a statement's conclusion mentions."""
+    body = stmt.split(", ", 1)[1] if stmt.startswith("forall") else stmt
+    return set(terms(body, [f"{v} : {ty}" for v, ty in binders(stmt)]))
+
+
+class CorpusRetrievalPolicy(RetrievalPolicy):
+    """Two indexes: Coq's Search over the library (B's, with the discovered
+    lemmas filtered out), and an index over the discovered corpus, offered as
+    `pose proof (L x ..); lia` with the goal's variables.
+
+    The index is its own, not Coq's Search: Search wants a lemma that
+    mentions everything the goal does, so for list_max l1 <= list_sum
+    (l1 ++ l2) it finds the instances list_max l1 <= list_sum (l1 ++ rev l1)
+    and misses list_max l1 <= list_sum l1, the lemma the proof needs. Here a
+    discovered lemma is retrieved when everything it mentions is in the goal,
+    the ones that mention most first, top_corpus of them. The form is pose
+    proof; lia because a discovered inequality is mostly a step inside
+    arithmetic, which apply cannot use."""
+
+    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3, top_corpus=4):
         super().__init__(base, top, score)
-        self.corpus = {c["name"]: c for c in corpus}
-        self.per_lemma = per_lemma
-        self.identity = dict(self.identity, id=f"retrieval/v1+corpus-lia/v1+{base.identity['id']}")
+        self.retriever = LibraryRetriever()
+        self.corpus = [(c["name"], c["statement"], lemma_terms(c["statement"])) for c in corpus]
+        self.per_lemma, self.top_corpus = per_lemma, top_corpus
+        self.identity = dict(self.identity,
+                             id=f"retrieval/v1+corpus-index/v2+{base.identity['id']}")
+
+    def corpus_lemmas(self, conclusion, hypotheses=()):
+        goal = set(terms(conclusion, hypotheses))
+        hits = [(len(ts), len(stmt), name, stmt) for name, stmt, ts in self.corpus
+                if ts and ts <= goal]
+        hits.sort(key=lambda h: (-h[0], h[1], h[2]))
+        return [(name, stmt) for _, _, name, stmt in hits[: self.top_corpus]]
 
     def propose(self, obs, path, last_failure=None, tried=None):
         out = super().propose(obs, path, last_failure, tried)
         cost = self.last_cost
         if not obs.goals:
             return out
-        ctx = hypothesis_vars(obs.goals[0].hypotheses)
+        g = obs.goals[0]
+        ctx = hypothesis_vars(g.hypotheses)
         have = {t for t, _ in out}
-        for i, name in enumerate(cost.get("lemmas", [])):
-            if name not in self.corpus:
-                continue
-            pools = [ctx.get(ty, []) for _, ty in binders(self.corpus[name]["statement"])]
+        found = self.corpus_lemmas(g.conclusion, g.hypotheses)
+        cost["corpus_lemmas"] = [n for n, _ in found]
+        mine = []
+        for i, (name, stmt) in enumerate(found):
+            pools = [ctx.get(ty, []) for _, ty in binders(stmt)]
             for args in itertools.islice(itertools.product(*pools), self.per_lemma):
                 t = f"pose proof ({' '.join((name,) + args)}); lia."
                 if t not in have:
                     have.add(t)
-                    out.append((t, self.score + 0.05 - 0.01 * i))
-                    cost["added"].append(t)
-        return out
+                    mine.append((t, self.score + 0.05 - 0.01 * i))
+        # A node's candidates are tried in order, so the discovered lemmas go
+        # before the library's: a corpus that grows would otherwise push its
+        # own lemmas past the step budget behind library lemmas Search found.
+        library = set(cost["added"])
+        cost["added"] = [t for t, _ in mine] + cost["added"]
+        return ([x for x in out if x[0] not in library] + mine
+                + [x for x in out if x[0] in library])
 
 
 def corollary(stmt, pre, corpus, backend="coqtop", timeout=2):
@@ -239,6 +302,75 @@ def certify_drops(forms, coqc="coqc"):
     return [s for s, f in forms if compile_corpus(text([(s, f)]), coqc) != "ok"]
 
 
+def axioms(corpus, coqc="coqc"):
+    """Print Assumptions on every corpus lemma: {name: [axioms]} for any that
+    rests on one. A kernel-checked proof from an axiom proves only what the
+    axiom asserts, so the corpus must be closed under the global context."""
+    if not corpus:
+        return {}
+    text = preamble(corpus) + "\n" + "".join(f"Print Assumptions {c['name']}.\n" for c in corpus)
+    d = tempfile.mkdtemp()
+    try:
+        path = os.path.join(d, "assumptions.v")
+        with open(path, "w") as fh:
+            fh.write(text)
+        p = subprocess.run([shutil.which(coqc) or coqc, "-q", path], cwd=d,
+                           capture_output=True, text=True, timeout=600)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    if p.returncode != 0:
+        raise RuntimeError("Print Assumptions failed: " + (p.stdout + p.stderr)[-500:])
+    blocks = re.split(r"(?=Closed under the global context|Axioms:)", p.stdout)[1:]
+    if len(blocks) != len(corpus):
+        raise RuntimeError(f"Print Assumptions: {len(blocks)} answers for {len(corpus)} lemmas")
+    return {c["name"]: re.findall(r"^(\S+) :", b, re.M)
+            for c, b in zip(corpus, blocks) if b.startswith("Axioms:")}
+
+
+def seeds(fresh, pool, check, rng, blocked):
+    """Candidates seeded by discovered lemmas, LEGO-Prover's evolver in
+    small: anti-unify each statement found this round with every one found
+    so far (two instances, list_sum (l1 ++ rev l1) and list_sum (l1 ++ l1),
+    propose list_sum (l1 ++ l2)), then generalize each one's subterms to
+    fresh variables. Kept if it holds on the tests, is about lists and is
+    not blocked (already a lemma, a derivation, excluded or seeded before).
+    A statement attempted earlier and left open is not blocked: the corpus
+    has grown since, so seeding it again is how it gets retried.
+    fresh, pool: statements. -> [{statement, operator, parents}], anti-unified
+    first, then smaller first."""
+    def read(x):
+        try:
+            return parse_statement(x)
+        except (ValueError, AssertionError, IndexError, TypeError):
+            return None
+    parsed = {x: read(x) for x in set(fresh) | set(pool)}
+    out, seen = [], set(blocked)
+
+    def offer(c, operator, parents):
+        lhs, rhs, _ = c
+        if not lhs.args or not any(VARS_TYPE[v] == "list" for v in lhs.vars() | rhs.vars()) \
+                or constant_list(lhs) or constant_list(rhs):
+            return
+        stmt = statement(*c, canonical_names(lhs, rhs))
+        if stmt in seen or not holds(*c, check) or nat_instance(*c, rng):
+            return
+        seen.add(stmt)
+        out.append({"statement": stmt, "operator": operator, "parents": parents,
+                    "size": lhs.size + rhs.size})
+    for a in sorted(fresh):
+        for b in sorted(pool):
+            if a != b and parsed[a] and parsed[b]:
+                g = anti_unify(parsed[a], parsed[b])
+                if g:
+                    offer(g, "anti_unify", sorted([a, b]))
+    for a in sorted(fresh):
+        if parsed[a]:
+            for g in generalize(parsed[a]):
+                offer(g, "generalize", [a])
+    out.sort(key=lambda x: (x["operator"] != "anti_unify", x["size"], x["statement"]))
+    return out
+
+
 def _load(path):
     if not os.path.exists(path):
         return []
@@ -258,16 +390,32 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
     dropped = {}
     stream = (iter([x for x in statements if x not in set(exclude)]) if statements is not None
               else candidate_stream(seed, max_term, min_size, max_size, set(exclude), dropped))
-    requeue, certified = [], 0
+    requeue, certified, queue, seeded = [], 0, [], set()
+    srng = random.Random(seed + 7)
+    seed_check = EDGE + [random_env(srng) for _ in range(2000)]
     for r in range(rounds):
-        batch = requeue + [s for _, s in zip(range(per_round - len(requeue)), stream)]
+        if r in done:
+            # replay the stream and the queues exactly as the round saw them
+            q = done[r].get("queue_after") or {}
+            take = done[r].get("from_stream", per_round - len(requeue))
+            list(zip(range(take), stream))
+            requeue, queue = q.get("requeue", []), q.get("seeds", [])
+            seeded = set(q.get("seeded", []))
+            certified = q.get("certified", certified)
+            log(f"round {r}: done before ({done[r]['proved']} proved)")
+            continue
+        # Seeds first, up to half the round: they come from lemmas already
+        # found, so they are where the corpus asks to be generalized.
+        cap = max(0, min(len(queue), per_round // 2, per_round - len(requeue)))
+        from_seeds, queue = queue[:cap], queue[cap:]
+        take = per_round - len(requeue) - len(from_seeds)
+        fresh_batch = [s for _, s in zip(range(take), stream)]
+        batch = list(dict.fromkeys(requeue + [x["statement"] for x in from_seeds] + fresh_batch))
+        seed_of = {x["statement"]: x for x in from_seeds}
         requeue = []
         if not batch:
             log("no candidates left")
             break
-        if r in done:
-            log(f"round {r}: done before ({done[r]['proved']} proved)")
-            continue
         seen_names = {c["name"] for c in corpus}
         pre = preamble(corpus)
         rdir = os.path.join(out, f"round-{r}")
@@ -333,6 +481,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             new.append({"name": name, "statement": row["statement"], "proof": row["proof"],
                         "round": r, "episode": row["episode"], "cites": cites,
                         "prover": (row.get("policy") or {}).get("id"),
+                        "source": ("seed:" + seed_of[row["statement"]]["operator"]
+                                   if row["statement"] in seed_of else "generator"),
                         "kernel": row["kernel"]})
         with open(der_path, "w") as fh:
             fh.writelines(json.dumps(d) + "\n" for d in derived)
@@ -342,6 +492,9 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         if check != "ok":
             raise RuntimeError(f"round {r}: the corpus does not compile with the new lemmas: "
                                f"{check}")
+        bad = axioms(corpus + new)
+        if bad:
+            raise RuntimeError(f"round {r}: corpus lemmas rest on axioms: {bad}")
         corpus += new
         with open(corpus_path, "a") as fh:
             fh.writelines(json.dumps(c) + "\n" for c in new)
@@ -353,11 +506,30 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         forms = dropped.get("nat_forms", [])[certified:]
         requeue = certify_drops(forms)
         certified += len(forms)
+        blocked = ({c["statement"] for c in corpus} | {d["statement"] for d in derived}
+                   | set(exclude) | seeded | {x["statement"] for x in queue})
+        for k in range(r):
+            blocked |= {d["statement"] for d in _load(os.path.join(out, f"round-{k}",
+                                                                   "derived.jsonl"))}
+        grown = [c["statement"] for c in new] + [d["statement"] for d in derived]
+        fresh_seeds = seeds(grown, [c["statement"] for c in corpus] + grown, seed_check,
+                            srng, blocked)
+        seeded |= {x["statement"] for x in fresh_seeds}
+        queue = sorted(queue + fresh_seeds,
+                       key=lambda x: (x["operator"] != "anti_unify", x["size"], x["statement"]))
+        with open(os.path.join(rdir, "seeds.jsonl"), "w") as fh:
+            fh.writelines(json.dumps(x) + "\n" for x in fresh_seeds)
         sites = [dict(x, statement=c["statement"]) for c in new
                  for x in citation_sites(c["proof"], seen_names)]
         heads = {k: list(rec.head(rec.load(os.path.join(rdir, k, RECORD))))
                  for k in ("fixed", "retrieval") if os.path.exists(os.path.join(rdir, k, RECORD))}
-        summary = {"round": r, "candidates": offered,
+        summary = {"round": r, "candidates": offered, "from_stream": len(fresh_batch),
+                   "from_seeds": len(from_seeds),
+                   "seeds_proposed": len(fresh_seeds),
+                   "proved_from_seeds": sum(c["source"] != "generator" for c in new),
+                   "axiom_free": True,
+                   "queue_after": {"requeue": requeue, "seeds": queue,
+                                   "seeded": sorted(seeded), "certified": certified},
                    "dropped_before_gate_so_far": {k: v for k, v in dropped.items()
                                                   if k != "nat_forms"},
                    "nat_drops_certified": len(forms) - len(requeue),
@@ -384,5 +556,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         done[r] = summary
         log(f"round {r}: gate {dict(gate)}; {known_by_corpus} already known from the corpus, "
             f"{len(derived)} derived from it; "
-            f"proved {len(new)} new ({citing} citing earlier lemmas); corpus {len(corpus)}")
+            f"proved {len(new)} new ({citing} citing earlier lemmas, "
+            f"{sum(c['source'] != 'generator' for c in new)} from {len(from_seeds)} seeds); "
+            f"corpus {len(corpus)}; {len(fresh_seeds)} new seeds")
     return corpus, [done[k] for k in sorted(done)]

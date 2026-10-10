@@ -290,3 +290,141 @@ def nat_abstraction(lhs, rhs, rel):
         v for v in lhs.vars() | rhs.vars() if VARS[v] == N)
     body = f"{go(lhs)[0]} {rel} {go(rhs)[0]}"
     return f"forall ({' '.join(vs)} : nat), {body}" if vs else body
+
+
+# Reading a rendered statement back, so a discovered lemma can seed new
+# candidates. The grammar is the one Term.coq() writes: every non-atomic
+# argument is parenthesized, so an expression is one prefix application or
+# one infix operation over atoms.
+HEADS = {"S": "S", "length": "length", "list_sum": "sum", "list_max": "lmax", "rev": "rev",
+         "map S": "mapS", "filter Nat.even": "even", "firstn": "firstn", "skipn": "skipn",
+         "repeat": "repeat", "seq": "seq", "removelast": "removelast", "Nat.max": "max",
+         "Nat.min": "min"}
+INFIX_OPS = {"+": "add", "*": "mul", "-": "sub", "++": "app", "::": "cons"}
+TOKEN = re.compile(r"map S|filter Nat\.even|Nat\.max|Nat\.min|\+\+|::|\[\]|[()+*-]|[\w.]+")
+
+
+def _split_top(text, seps):
+    depth = 0
+    for i, ch in enumerate(text):
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0:
+            for sep in seps:
+                if text.startswith(sep, i):
+                    return text[:i], sep.strip(), text[i + len(sep):]
+    return None
+
+
+def parse_term(text):
+    toks = TOKEN.findall(text)
+    pos = [0]
+
+    def atom():
+        t = toks[pos[0]]
+        pos[0] += 1
+        if t == "(":
+            e = expr()
+            assert toks[pos[0]] == ")", text
+            pos[0] += 1
+            return e
+        if t in VARS:
+            return Term(t)
+        if t == "0":
+            return Term("0")
+        if t == "[]":
+            return Term("nil")
+        if t in HEADS:
+            op = HEADS[t]
+            return Term(op, [atom() for _ in OPS[op][0]])
+        raise ValueError(f"cannot read {t!r} in {text!r}")
+
+    def expr():
+        a = atom()
+        if pos[0] < len(toks) and toks[pos[0]] in INFIX_OPS:
+            op = INFIX_OPS[toks[pos[0]]]
+            pos[0] += 1
+            return Term(op, [a, atom()])
+        return a
+
+    e = expr()
+    if pos[0] != len(toks):
+        raise ValueError(f"trailing input in {text!r}")
+    return e
+
+
+def parse_statement(stmt):
+    """'forall (l1 : list nat), A <= B' -> (lhs, rhs, rel)."""
+    body = stmt.split(", ", 1)[1] if stmt.startswith("forall") else stmt
+    lhs, rel, rhs = _split_top(body, [" <= ", " = "])
+    return parse_term(lhs), parse_term(rhs), rel
+
+
+def _subterms(t):
+    yield t
+    for a in t.args:
+        yield from _subterms(a)
+
+
+def _replace(t, target, var):
+    if t.coq() == target:
+        return Term(var)
+    if not t.args:
+        return t
+    return Term(t.op, [_replace(a, target, var) for a in t.args])
+
+
+def _fresh(ty, used):
+    for v in (["l1", "l2"] if ty == L else ["n", "m"]):
+        if v not in used:
+            return v
+    return None
+
+
+def anti_unify(a, b):
+    """The least general (lhs, rhs, rel) that a and b are both instances of,
+    with each pair of differing subterms replaced by one fresh variable; None
+    if they differ in shape, in relation, or need more variables than the
+    signature has. a, b: (lhs, rhs, rel)."""
+    if a[2] != b[2]:
+        return None
+    used = set().union(*(t.vars() for t in a[:2] + b[:2]))
+    names = {}
+
+    def go(x, y):
+        if x.coq() == y.coq():
+            return x
+        if x.op == y.op and len(x.args) == len(y.args) and x.args:
+            return Term(x.op, [go(p, q) for p, q in zip(x.args, y.args)])
+        if x.type != y.type:
+            raise ValueError
+        key = (x.coq(), y.coq())
+        if key not in names:
+            v = _fresh(x.type, used)
+            if v is None:
+                raise ValueError
+            used.add(v)
+            names[key] = v
+        return Term(names[key])
+    try:
+        lhs, rhs = go(a[0], b[0]), go(a[1], b[1])
+    except ValueError:
+        return None
+    return (lhs, rhs, a[2]) if names else None
+
+
+def generalize(c):
+    """Each non-variable subterm of c, every occurrence at once, replaced by
+    a fresh variable of its type: list_sum (l1 ++ rev l1) gives
+    list_sum (l1 ++ l2)."""
+    lhs, rhs, rel = c
+    used = lhs.vars() | rhs.vars()
+    seen = set()
+    for t in list(_subterms(lhs)) + list(_subterms(rhs)):
+        key = t.coq()
+        if t.op in VARS or key in seen or (t.type == L and not t.vars()):
+            continue
+        seen.add(key)
+        v = _fresh(t.type, used)
+        if v is not None:
+            yield (_replace(lhs, key, v), _replace(rhs, key, v), rel)
