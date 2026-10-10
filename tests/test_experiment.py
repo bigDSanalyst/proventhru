@@ -450,6 +450,23 @@ class TestExplore(unittest.TestCase):
             self.assertEqual([c["statement"] for c in corpus], [lemma])
             self.assertEqual(rounds[0]["derived_after_proof"], 1)
 
+    def test_number_only_drops_are_certified_and_a_false_one_goes_back(self):
+        from proventhru.explore import candidate_stream, certify_drops
+        stats = {}
+        list(zip(range(40), candidate_stream(2, 4, 3, 6, stats=stats)))
+        self.assertTrue(stats["nat_forms"])
+        self.assertEqual(certify_drops(stats["nat_forms"]), [])
+        self.assertEqual(certify_drops([("x", "forall (a0 n : nat), a0 - n <= n")]), ["x"])
+
+    def test_citations_are_classified_by_position(self):
+        from proventhru.explore import citation_sites
+        self.assertEqual(citation_sites(["intros; pose proof (pt_r0_0 l1); lia."]),
+                         [{"lemma": "pt_r0_0", "index": 0, "inner": False}])
+        self.assertEqual(citation_sites(["intros.", "induction l1.", "simpl.",
+                                         "pose proof (pt_r1_2 l1); lia."]),
+                         [{"lemma": "pt_r1_2", "index": 3, "inner": True}])
+        self.assertEqual(citation_sites(["apply pt_r9_9."], names={"pt_r0_0"}), [])
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy

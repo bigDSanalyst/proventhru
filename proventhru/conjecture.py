@@ -266,3 +266,27 @@ def nat_instance(lhs, rhs, rel, rng, tests=500):
         if (rel == "=" and a != b) or (rel == "<=" and not a <= b):
             return False
     return True
+
+
+def nat_abstraction(lhs, rhs, rel):
+    """The law over nat that nat_instance() found the candidate to be an
+    instance of, as a Coq statement: each list-derived subterm becomes a0, a1 ..
+    So the drop can be certified (first [lia | nia] proves it), not just tested."""
+    atoms = {}
+    _atoms(lhs, atoms)
+    _atoms(rhs, atoms)
+
+    def go(t):
+        if t.type == N and t.coq() in atoms:
+            return f"a{atoms[t.coq()]}", True
+        if t.op in VARS:
+            return t.op, True
+        parts = []
+        for a in t.args:
+            p, atom = go(a)
+            parts.append(p if atom else f"({p})")
+        return OPS[t.op][3](*parts), not t.args
+    vs = [f"a{i}" for i in range(len(atoms))] + sorted(
+        v for v in lhs.vars() | rhs.vars() if VARS[v] == N)
+    body = f"{go(lhs)[0]} {rel} {go(rhs)[0]}"
+    return f"forall ({' '.join(vs)} : nat), {body}" if vs else body

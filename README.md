@@ -293,7 +293,9 @@ proventhru report out/A600/records.jsonl out/C600/records.jsonl
    the held-out set), smallest first;
 2. **tests** each one on 2,000 random inputs, and drops instances of laws
    over `nat` alone: `0 * list_sum l = 0` is `0 * a = 0`, which is true of any
-   number, so it says nothing about lists;
+   number, so it says nothing about lists. The drops are certified: each one's
+   law over `nat` is proved by `lia`/`nia` every round, and a candidate whose
+   law is not proved goes back to the prover;
 3. records **derivations**: a candidate that `pose proof (L l1); lia` closes
    with one lemma `L` found earlier is kept as a derivation citing `L`, not as
    a new lemma;
@@ -326,6 +328,11 @@ Outputs:
 - `rounds.jsonl` holds per-round counts (gate, derived, proved, citing, and
   `uses_of_corpus`, every place a discovered lemma did work) and the record heads;
 - `round-N/` holds the run records.
+
+`python tools/explore_report.py OUT` shows where the corpus did work, round by
+round. It splits citations inside proofs into top-level ones, and inner ones that
+come after an induction or case split, at a subgoal the statement doesn't show. Inner
+citations are the sign that the loop deepens, not just closes.
 
 It runs on CPU and needs no model.
 

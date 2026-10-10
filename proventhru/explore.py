@@ -51,11 +51,12 @@ import itertools
 import shutil
 import subprocess
 import tempfile
+import time
 from collections import Counter
 
 from . import record as rec
 from .conjecture import (EDGE, L, N, canonical_names, candidates, enumerate_classes, holds,
-                         nat_instance, random_env, statement)
+                         nat_abstraction, nat_instance, random_env, statement)
 from .env import DEFAULT_PREAMBLE
 from .pipeline import RECORD, run
 from .retrieval import RetrievalPolicy
@@ -171,6 +172,7 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
             stats["refuted_by_testing"] = stats.get("refuted_by_testing", 0) + 1
         elif nat_instance(*c, arng):
             stats["nat_instance"] = stats.get("nat_instance", 0) + 1
+            stats.setdefault("nat_forms", []).append((s, nat_abstraction(*c)))
         else:
             yield s
 
@@ -207,6 +209,36 @@ def compile_corpus(text, coqc="coqc"):
         shutil.rmtree(d, ignore_errors=True)
 
 
+INDUCTIVE = re.compile(r"^\s*(intros?[^.]*;\s*)?(induction|destruct|case|elim)\b")
+
+
+def citation_sites(proof, names=None):
+    """Where a proof uses a discovered lemma: [{lemma, index, inner}]. inner
+    means an induction or case split comes before it in the proof, so the
+    lemma is used at a subgoal the statement does not show; otherwise it is
+    used at the top (intros; pose proof (L l1); lia)."""
+    out, split = [], False
+    for i, tac in enumerate(proof):
+        for name in LEMMA_NAME.findall(tac):
+            if names is None or name in names:
+                out.append({"lemma": name, "index": i, "inner": split})
+        if INDUCTIVE.search(tac):
+            split = True
+    return out
+
+
+def certify_drops(forms, coqc="coqc"):
+    """Prove each dropped candidate's nat law: [(statement, form)] -> the
+    statements whose law did not go through (they go back to the prover).
+    One compile for all; one per form only if that fails."""
+    def text(fs):
+        return BASE + "\n" + "".join(f"Goal {f}.\nProof. intros; first [lia | nia]. Qed.\n"
+                                      for _, f in fs)
+    if not forms or compile_corpus(text(forms), coqc) == "ok":
+        return []
+    return [s for s, f in forms if compile_corpus(text([(s, f)]), coqc) != "ok"]
+
+
 def _load(path):
     if not os.path.exists(path):
         return []
@@ -226,8 +258,10 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
     dropped = {}
     stream = (iter([x for x in statements if x not in set(exclude)]) if statements is not None
               else candidate_stream(seed, max_term, min_size, max_size, set(exclude), dropped))
+    requeue, certified = [], 0
     for r in range(rounds):
-        batch = [s for _, s in zip(range(per_round), stream)]
+        batch = requeue + [s for _, s in zip(range(per_round - len(requeue)), stream)]
+        requeue = []
         if not batch:
             log("no candidates left")
             break
@@ -302,7 +336,9 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                         "kernel": row["kernel"]})
         with open(der_path, "w") as fh:
             fh.writelines(json.dumps(d) + "\n" for d in derived)
+        t0 = time.perf_counter()
         check = compile_corpus(preamble(corpus + new))
+        compile_s = round(time.perf_counter() - t0, 2)
         if check != "ok":
             raise RuntimeError(f"round {r}: the corpus does not compile with the new lemmas: "
                                f"{check}")
@@ -311,10 +347,21 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             fh.writelines(json.dumps(c) + "\n" for c in new)
         with open(os.path.join(out, "corpus.v"), "w") as fh:
             fh.write(preamble(corpus))
+        # The number-only drops are certified, not just tested: each one's
+        # nat law is proved by lia / nia. One that is not goes back to the
+        # prover in the next round.
+        forms = dropped.get("nat_forms", [])[certified:]
+        requeue = certify_drops(forms)
+        certified += len(forms)
+        sites = [dict(x, statement=c["statement"]) for c in new
+                 for x in citation_sites(c["proof"], seen_names)]
         heads = {k: list(rec.head(rec.load(os.path.join(rdir, k, RECORD))))
                  for k in ("fixed", "retrieval") if os.path.exists(os.path.join(rdir, k, RECORD))}
         summary = {"round": r, "candidates": offered,
-                   "dropped_before_gate_so_far": dict(dropped), "gate": dict(gate),
+                   "dropped_before_gate_so_far": {k: v for k, v in dropped.items()
+                                                  if k != "nat_forms"},
+                   "nat_drops_certified": len(forms) - len(requeue),
+                   "nat_drops_requeued": requeue, "gate": dict(gate),
                    "known_by_corpus": known_by_corpus,
                    "derived_before_gate": sum(d["stage"] == "before_gate" for d in derived),
                    "derived_after_proof": sum(d["stage"] == "after_proof" for d in derived),
@@ -322,7 +369,15 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                    "proofs_citing_corpus": citing,
                    # every place the corpus did work: closed at the gate by one
                    # lemma, derived from one, or cited inside a new proof
-                   "uses_of_corpus": known_by_corpus + len(derived) + citing, "corpus_size": len(corpus),
+                   "uses_of_corpus": known_by_corpus + len(derived) + citing,
+                   # by position: the gate and derivations use a lemma at the
+                   # top by construction; inner = after an induction or case
+                   # split, at a subgoal the statement does not show
+                   "citations": {"gate_one_lemma": known_by_corpus,
+                                 "derived_top": len(derived),
+                                 "proofs_top": sum(not x["inner"] for x in sites),
+                                 "proofs_inner": sum(x["inner"] for x in sites)},
+                   "citation_sites": sites, "corpus_compile_s": compile_s, "corpus_size": len(corpus),
                    "preamble_sha256": rec.sha256(pre), "record_heads": heads}
         with open(summary_path, "a") as fh:
             fh.write(json.dumps(summary) + "\n")
