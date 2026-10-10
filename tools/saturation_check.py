@@ -22,9 +22,9 @@ proof is classified:
   necessary          composed, not a derivation, and V0 fails on it
   inner              a corpus lemma cited after an induction or case split
 
-Crowding: statements the run proved in its retrieval pass, rerun with P and PS
-at that pass's budget (half of --steps). If PS proves fewer, saturation spends
-the budget that simpler steps needed.
+Crowding: every round's retrieval pass replayed exactly, with the corpus that
+round saw and that pass's budget (half of --steps), as P and as PS. If PS
+proves fewer, saturation spends the budget that simpler steps needed.
 
 Writes OUT/summary.json and OUT/proofs.jsonl. CPU only.
 """
@@ -93,21 +93,30 @@ def main(argv=None):
     with open(os.path.join(a.out, "proofs.jsonl"), "w") as fh:
         fh.writelines(json.dumps(r) + "\n" for r in rows)
 
-    # crowding: what the run's retrieval pass proved, at that pass's budget
-    done = []
+    # Crowding: replay each round's retrieval pass exactly, with the corpus
+    # that round saw (earlier rounds only) and that pass's budget, as P and as
+    # PS. Statements the run already proved can't be rerun under the final
+    # corpus: the gate closes them with one corpus lemma (trivial), so they
+    # never reach the prover.
+    crowd = {"P": 0, "PS": 0, "lost": [], "statements": 0}
     r = 0
     while os.path.isdir(os.path.join(a.run, f"round-{r}")):
         p = os.path.join(a.run, f"round-{r}", "retrieval", RECORD)
         if os.path.exists(p):
-            done += [x["statement"] for x in rec.corpus(rec.load(p)) if x["standing"] == "proved"]
+            stmts = [x["statement"] for x in rec.corpus(rec.load(p))]
+            seen = [c for c in corpus if c["round"] < r]
+            got_r = {}
+            for k, sat in (("P", False), ("PS", True)):
+                d = os.path.join(a.out, f"crowding-r{r}-{k}")
+                run(stmts, d, preamble(seen), budget=None, step_budget=a.steps // 2,
+                    backend=a.backend, jobs=a.jobs, log=lambda *_: None,
+                    policy_factory=lambda: CorpusRetrievalPolicy(StructuralTacticsV2(), seen,
+                                                                 saturate=sat))
+                got_r[k] = set(proved(d))
+                crowd[k] += len(got_r[k])
+            crowd["lost"] += sorted(got_r["P"] - got_r["PS"])
+            crowd["statements"] += len(stmts)
         r += 1
-    sample = sorted(set(done))[: a.crowding]
-    crowd = {}
-    for k in ("P", "PS"):
-        d = os.path.join(a.out, f"crowding-{k}")
-        run(sample, d, pre, budget=None, step_budget=a.steps // 2, backend=a.backend,
-            jobs=a.jobs, log=lambda *_: None, policy_factory=policies[k])
-        crowd[k] = len(proved(d))
 
     summary = {
         "run": a.run, "steps": a.steps, "corpus": len(corpus), "open": len(opens),
@@ -118,7 +127,7 @@ def main(argv=None):
         "ps_only_v0_proves": sum(x["v0_proves"] for x in rows),
         "necessary_composition": sum(x["necessary"] for x in rows),
         "inner_citations": sum(x["inner"] for x in rows),
-        "crowding": {"statements": len(sample), "budget": a.steps // 2, **crowd},
+        "crowding": {"budget": a.steps // 2, **crowd},
     }
     with open(os.path.join(a.out, "summary.json"), "w") as fh:
         json.dump(summary, fh, indent=1)
