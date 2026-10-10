@@ -22,7 +22,7 @@ import json
 import os
 import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from proventhru import record as rec  # noqa: E402
@@ -51,6 +51,8 @@ def analyse(path, replay=False):
     entries = rec.load(path)
     eps = {e["data"]["episode"]: e["data"] for e in entries if e["kind"] == "episode"}
     steps = rec.steps(entries)
+    added = {e["seq"]: set((e["data"].get("cost") or {}).get("added") or [])
+             for e in entries if e["kind"] == "proposal"}
     preamble = next(iter(eps.values()))["preamble"] if eps else ""
     errs = []
     for s in steps:
@@ -77,7 +79,8 @@ def analyse(path, replay=False):
                     for t in s["path"]:
                         h, _ = sess.run(h, t, timeout=10)
                     sess.run(h, s["tactic"], timeout=10)
-                    hidden[ep].append(s["tactic"])
+                    src = "retrieval" if s["tactic"] in added.get(s.get("proposal"), ()) else "policy"
+                    hidden[ep].append((s["tactic"], src))
                 except Exception:
                     pass
                 finally:
@@ -91,6 +94,8 @@ def analyse(path, replay=False):
     if hidden is not None:
         affected = {ep for ep, v in hidden.items() if v}
         res.update(hidden_successes=sum(len(v) for v in hidden.values()),
+                   hidden_by_source=dict(Counter(src for v in hidden.values() for _, src in v)),
+                   hidden_tactics=sorted({t for v in hidden.values() for t, _ in v}),
                    episodes_affected=len(affected),
                    affected_and_proved=len(affected & proved),
                    affected_and_unproved=len(affected - proved),
