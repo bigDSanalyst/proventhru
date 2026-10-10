@@ -51,6 +51,9 @@ found", not "none exists"):
   checked each round; the Lean community's "no sorry, no axioms" norm, enforced.
 - **The experimental discipline.** Pre-registration with a hashed protocol, refusal to
   run outside it, and hash-chained records, applied to prover evaluation.
+- **An agent-instruction file for Rocq** (`AGENTS.md`). The maintained ones we found in
+  October 2026 (SKILL.md / AGENTS.md files, listed below) are all for Lean 4. This is the
+  first for Rocq that we know of, which is not the same as the first that exists.
 
 ## Theory exploration: the ancestor of `proventhru explore`
 
