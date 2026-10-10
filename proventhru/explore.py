@@ -251,7 +251,8 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         self.saturate, self.saturate_cap = saturate, saturate_cap
         # "pose": pose proof (L x); lia only (as through run 9). "all": also
         # rewrite L, rewrite <- L and apply L, which find the instance by
-        # unification (insert_length at sort t, inside an induction)
+        # unification (insert_length at sort t, inside an induction), and an
+        # induction that solves the trivial cases so the step case comes first
         self.corpus_forms = corpus_forms
         self.retriever = LibraryRetriever()
         self.corpus = [(c["name"], c["statement"], lemma_terms(c["statement"])) for c in corpus]
@@ -283,8 +284,11 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         for i, (name, stmt) in enumerate(found):
             if self.corpus_forms == "all":
                 concl = stmt.rsplit(" -> ", 1)[-1]
-                forms = ([f"rewrite {name}.", f"rewrite <- {name}."] if " = " in concl else [])
-                forms += [f"apply {name}.", f"eapply {name}; eassumption."]
+                close = "first [lia | reflexivity | congruence | assumption]"
+                forms = ([f"rewrite {name}; {close}.", f"rewrite <- {name}; {close}.",
+                          f"rewrite {name}.", f"rewrite <- {name}."] if " = " in concl else [])
+                forms += [f"apply {name}; assumption.", f"apply {name}.",
+                          f"eapply {name}; eassumption."]
                 for t in forms:
                     if t not in have:
                         have.add(t)
@@ -298,6 +302,17 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         # A node's candidates are tried in order, so the discovered lemmas go
         # before the library's: a corpus that grows would otherwise push its
         # own lemmas past the step budget behind library lemmas Search found.
+        if self.corpus_forms == "all":
+            # Induction that closes the trivial cases, so the step case is the
+            # first goal: the corpus index reads only the first goal, and a
+            # discovered lemma is used at the step case (sort_length needs
+            # insert_length there), behind a base case otherwise.
+            for v in [v for v in ctx.get(L, []) if not v.startswith("IH")]:
+                t = (f"induction {v} as [|a t IH]; simpl in *; "
+                     f"try solve [lia | reflexivity | constructor].")
+                if t not in have:
+                    have.add(t)
+                    mine.append((t, self.score))
         sat = self.saturation(g) if self.saturate else None
         if sat and sat not in have:
             mine.append((sat, self.score))
