@@ -222,15 +222,35 @@ def same_context(lhs, rhs):
     return bool({a.coq() for a in lhs.args} & {b.coq() for b in rhs.args})
 
 
-def candidates(classes, min_size, max_size):
+def candidates(classes, min_size, max_size, congruence="eval"):
     """Candidate (lhs, rhs, rel) from the fingerprints alone; holds() is run
-    later, only on what is sampled."""
+    later, only on what is sampled.
+
+    congruence: how f(x) against f(y) is treated. "eval" (the held-out and
+    dev sets were made this way) drops every such pair as an instance of a
+    smaller law about x and y. "exact" (exploration) drops it only when x and
+    y are in one class, so the pair really follows by congruence: for lists
+    there is often no smaller law (removelast l against l), and "eval" drops
+    every monotonicity lemma, list_max (removelast l) <= list_max l."""
     out = []
+    fp = {}
+    for (ty, f), members in classes.items():
+        for m in members:
+            fp[m.coq()] = (ty, f)
+
+    def congruent(lhs, rhs):
+        if congruence == "eval":
+            return same_context(lhs, rhs)
+        if lhs.op != rhs.op or not lhs.args:
+            return False
+        diff = [(a, b) for a, b in zip(lhs.args, rhs.args) if a.coq() != b.coq()]
+        return len(diff) == 1 and fp.get(diff[0][0].coq()) is not None \
+            and fp.get(diff[0][0].coq()) == fp.get(diff[0][1].coq())
 
     def ok_shape(lhs, rhs):
         both = lhs.vars() | rhs.vars()
         return (any(VARS[v] == L for v in both) and min_size <= lhs.size + rhs.size <= max_size
-                and lhs.args and lhs.vars() and not same_context(lhs, rhs)
+                and lhs.args and lhs.vars() and not congruent(lhs, rhs)
                 and not constant_list(lhs) and not constant_list(rhs))
 
     for (ty, _), members in classes.items():

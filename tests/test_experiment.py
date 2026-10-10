@@ -539,6 +539,19 @@ class TestExplore(unittest.TestCase):
         for s in wide:
             self.assertEqual(statement(*parse_statement(s)), s)
 
+    def test_exploration_keeps_monotonicity_lemmas_the_eval_filter_drops(self):
+        from proventhru.explore import candidate_stream
+        mono = "forall (l1 : list nat), list_max (removelast l1) <= list_max l1"
+        explore = [s for _, s in zip(range(60), candidate_stream(2, 4, 3, 6))]
+        self.assertIn(mono, explore)
+        import random
+        from proventhru.conjecture import (EDGE, candidates, canonical_names, enumerate_classes,
+                                           random_env, statement)
+        rng = random.Random(2)
+        classes = enumerate_classes(4, EDGE + [random_env(rng) for _ in range(40)])
+        evals = {statement(*c, canonical_names(c[0], c[1])) for c in candidates(classes, 3, 6)}
+        self.assertNotIn(mono, evals)       # the eval sets' rule, unchanged
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy

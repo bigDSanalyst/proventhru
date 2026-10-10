@@ -235,7 +235,7 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
     wide_check = [wide_env(wrng) for _ in range(1000)]
     classes = enumerate_classes(max_term, envs, SIGNATURES[signature])
     seen, pool = set(exclude), []
-    for c in candidates(classes, min_size, max_size):
+    for c in candidates(classes, min_size, max_size, congruence="exact"):
         if require and not (ops_used(c[0]) | ops_used(c[1])) & set(require):
             continue
         s = statement(*c, canonical_names(c[0], c[1]))
