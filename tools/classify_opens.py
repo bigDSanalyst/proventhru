@@ -17,6 +17,10 @@ run's final corpus loaded. Its class is the first rung that closes it:
      induction (at the step case's tail) or with two corpus lemmas in one
      proof. A prover that uses the corpus structurally would find it; the
      fixed one does not.
+  2s a composition: closed by stating every corpus lemma the statement's
+     terms allow, at its variables and subterms, then one lia / nia: a chain
+     of several discovered lemmas (removelast and filter are monotone, max is
+     at most the sum), at the top.
   3v outside the vocabulary: closed only by tactics the prover never offers:
      revert a number before induction (firstn, skipn), case on the tail in
      the step case (removelast), or case on an if (filter).
@@ -154,14 +158,27 @@ def false_by_wider_tests(stmt, tests=3000, seed=11):
     return not holds(lhs, rhs, rel, envs)
 
 
+def saturation(stmt, corpus, cap=60):
+    goal = _goal_terms(stmt)
+    mentions = lemma_terms(stmt) | {'"<="', '"="'}
+    poses = [f"pose proof ({' '.join((c['name'],) + a)})" for c in corpus
+             if lemma_terms(c["statement"]) <= mentions
+             for a in itertools.product(*[goal[t] for _, t in binders(c["statement"])])]
+    return f"intros; {'; '.join(poses[:cap])}; {CLOSE}." if poses else None
+
+
 def classify(stmt, pre, corpus, backend="coqtop", timeout=3):
     if false_by_wider_tests(stmt):
         return "F", "counterexample with wider random inputs"
     s = open_session(pre, stmt, backend)
     try:
         steps = ladder(stmt, corpus)
-        for cls in ("1", "2", "3v"):
-            tac = _first_closing(s, [t for c, t in steps if c == cls], timeout)
+        for cls in ("1", "2", "2s", "3v"):
+            if cls == "2s":
+                sat = saturation(stmt, corpus)
+                tac = sat and _first_closing(s, [sat], 10)
+            else:
+                tac = _first_closing(s, [t for c, t in steps if c == cls], timeout)
             if tac:
                 return cls, tac
         return "3", None
