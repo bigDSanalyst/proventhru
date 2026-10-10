@@ -7,3 +7,8 @@ out/
 *.glob
 .lia.cache
 .nia.cache
+pilots/**/*.vo
+pilots/**/*.vok
+pilots/**/*.vos
+pilots/**/*.glob
+pilots/**/.*.aux
