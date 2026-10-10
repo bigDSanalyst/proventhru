@@ -565,6 +565,25 @@ class TestExplore(unittest.TestCase):
             rows = rec.corpus(rec.load(os.path.join(out, RECORD)))
         self.assertEqual([r["standing"] for r in rows], ["proved"] * 3)
 
+    def test_subclassify_finds_small_counterexamples_and_match_cases(self):
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+        from subclassify_opens import combined_scripts, false_small
+        from proventhru.explore import BASE
+        from proventhru.gate import _first_closing
+        from proventhru.session import open_session
+        self.assertTrue(false_small(
+            "forall (l1 : list nat), length (removelast (removelast (removelast l1))) "
+            "<= list_sum l1"))
+        self.assertFalse(false_small("forall (l1 : list nat), list_max l1 <= list_sum l1"))
+        # simpl leaves a match on list_max (map S t) that only a case on it opens
+        stmt = "forall (l1 : list nat), list_max l1 <= list_max (map S l1)"
+        s = open_session(BASE, stmt, "coqtop")
+        try:
+            self.assertIsNotNone(_first_closing(s, combined_scripts(stmt), 10))
+        finally:
+            s.close()
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy
