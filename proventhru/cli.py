@@ -120,6 +120,18 @@ def main(argv=None):
     _policy_args(r)
     rp = sub.add_parser("report", help="compare runs from their records")
     rp.add_argument("records", nargs="+")
+    x = sub.add_parser("explore", help="the conjecture loop: generate, gate, prove, keep")
+    x.add_argument("--out", required=True)
+    x.add_argument("--rounds", type=int, default=4)
+    x.add_argument("--per-round", type=int, default=80, help="candidates gated per round")
+    x.add_argument("--step-budget", type=int, default=600)
+    x.add_argument("--jobs", type=int, default=1)
+    x.add_argument("--seed", type=int, default=2, help="generator seed (the test set used 1)")
+    x.add_argument("--max-term", type=int, default=5)
+    x.add_argument("--min-size", type=int, default=3)
+    x.add_argument("--max-size", type=int, default=9)
+    x.add_argument("--exclude", action="append", default=[],
+                   help="statement file never to propose from (repeatable): held-out and dev sets")
     pr = sub.add_parser("protocol", help="hashes the protocol registers, and its check")
     pr.add_argument("what", choices=["check", "set", "prompt"])
     pr.add_argument("path", nargs="?")
@@ -135,6 +147,17 @@ def main(argv=None):
     n.add_argument("--by", default="unknown")
     a = ap.parse_args(argv)
 
+    if a.cmd == "explore":
+        from .explore import explore
+        ex = set()
+        for f in a.exclude:
+            ex |= set(_statements(f)[1])
+        corpus, rounds = explore(a.out, rounds=a.rounds, per_round=a.per_round,
+                                 step_budget=a.step_budget, jobs=a.jobs, exclude=ex,
+                                 seed=a.seed, max_term=a.max_term, min_size=a.min_size,
+                                 max_size=a.max_size, backend=a.backend or "coqtop")
+        print(json.dumps({"corpus": len(corpus), "rounds": rounds[-1:] and rounds[-1]}))
+        return 0
     if a.cmd == "protocol":
         from . import protocol as proto
         if a.what == "set":

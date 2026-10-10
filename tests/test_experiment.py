@@ -376,6 +376,69 @@ class TestNullary(unittest.TestCase):
         self.assertEqual(assemble("simpl", "in IHl")[0], "simpl in IHl.")
 
 
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestExplore(unittest.TestCase):
+    def test_a_proved_lemma_joins_the_corpus_and_its_instances_are_not_new(self):
+        from proventhru import record as rec
+        from proventhru.explore import explore
+        lemma = "forall l : list nat, length (rev (l ++ l)) = 2 * length l"
+        instance = "forall l : list nat, length (rev (map S l ++ map S l)) = 2 * length (map S l)"
+        excluded = "forall n : nat, n + 0 = n"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=2, per_round=1, step_budget=600,
+                                     statements=[lemma, instance, excluded],
+                                     exclude={excluded}, log=lambda *_: None)
+            self.assertEqual([c["statement"] for c in corpus], [lemma])
+            self.assertEqual(corpus[0]["name"], "pt_r0_0")
+            self.assertEqual(rounds[0]["proved"], 1)
+            self.assertEqual(rounds[1]["known_by_corpus"], 1)      # an instance is not new
+            self.assertEqual(rounds[1]["proved"], 0)
+            with open(os.path.join(out, "corpus.v")) as fh:
+                self.assertIn("Lemma pt_r0_0 : " + lemma + ".", fh.read())
+            r1 = rec.load(os.path.join(out, "round-1", "fixed", "records.jsonl"))
+            self.assertEqual(rec.verify(r1), [])
+            self.assertIn("pt_r0_0", r1[0]["data"]["preamble"])    # round 1 saw the corpus
+            # resuming does nothing new
+            again, rounds2 = explore(out, rounds=2, per_round=1, step_budget=600,
+                                     statements=[lemma, instance], log=lambda *_: None)
+            self.assertEqual(len(again), 1)
+            self.assertEqual(len(rounds2), 2)
+
+    def test_the_candidate_stream_is_deterministic_and_excludes(self):
+        from proventhru.explore import candidate_stream
+        a = [s for _, s in zip(range(10), candidate_stream(2, 4, 4, 7))]
+        b = [s for _, s in zip(range(10), candidate_stream(2, 4, 4, 7, exclude={a[0]}))]
+        self.assertEqual(a, [s for _, s in zip(range(10), candidate_stream(2, 4, 4, 7))])
+        self.assertNotIn(a[0], b)
+
+    def test_instances_of_nat_laws_are_dropped_and_list_laws_kept(self):
+        import random
+        from proventhru.conjecture import Term, nat_instance
+        T = Term
+        l, n = T("l1"), T("n")
+        rng = random.Random(0)
+        # 0 * list_sum l = 0 is 0 * a = 0; list_max l - n <= list_max l is a - n <= a
+        self.assertTrue(nat_instance(T("mul", [T("0"), T("sum", [l])]), T("0"), "=", rng))
+        self.assertTrue(nat_instance(T("sub", [T("lmax", [l]), n]), T("lmax", [l]), "<=", rng))
+        # list_max l <= list_sum l is about lists; so is length (rev l) = length l
+        self.assertFalse(nat_instance(T("lmax", [l]), T("sum", [l]), "<=", rng))
+        self.assertFalse(nat_instance(T("length", [T("rev", [l])]), T("length", [l]), "=", rng))
+        # a list-typed law is never abstracted
+        self.assertFalse(nat_instance(T("rev", [T("rev", [l])]), l, "=", rng))
+
+    def test_an_arithmetic_corollary_of_the_corpus_is_set_aside(self):
+        from proventhru.explore import explore
+        lemma = "forall (l1 : list nat), list_max l1 <= list_sum l1"
+        weaker = "forall (l1 : list nat) (n : nat), (list_max l1) - n <= list_sum l1"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=2, per_round=1, step_budget=600,
+                                     statements=[lemma, weaker], log=lambda *_: None)
+            self.assertEqual([c["statement"] for c in corpus], [lemma])
+            self.assertEqual(rounds[1]["corollaries_of_corpus"], 1)
+            with open(os.path.join(out, "round-1", "corollaries.jsonl")) as fh:
+                self.assertIn("pose proof (pt_r0_0 l1); lia.", fh.read())
+
+
 class Unavailable(RuntimeError):
     unavailable = True
 

@@ -284,6 +284,46 @@ proventhru run examples/eval_open.txt --out out/dev-C --budget 0 --step-budget 6
 proventhru report out/A600/records.jsonl out/C600/records.jsonl
 ```
 
+## The conjecture loop: proving what nobody asked for
+
+`proventhru explore` is the discovery half. In each round it:
+
+1. **generates** candidates over the stdlib `nat` / `list nat` signature
+   (`proventhru/conjecture.py`, the same QuickSpec-style enumerator that built
+   the held-out set), smallest first;
+2. **tests** each one on 2,000 random inputs, and drops instances of laws
+   over `nat` alone: `0 * list_sum l = 0` is `0 * a = 0`, which is true of any
+   number, so it says nothing about lists;
+3. sets aside **corollaries**, candidates that `pose proof (L l1); lia`
+   closes with one lemma `L` found earlier;
+4. **gates** the rest. Trivial now also means closed by one discovered lemma;
+5. **proves** what is open with half the step budget on fixed tactics, then
+   half on fixed tactics + retrieval for what is left;
+6. **keeps** every kernel-certified proof as a `Lemma pt_rN_k` in the corpus,
+   which is in the preamble of every later round. So retrieval and later
+   proofs can cite it.
+
+The whole corpus is recompiled from scratch after every round. The held-out
+and dev statements are excluded (`--exclude`), so the corpus can't leak into
+an evaluation. "Novel" means not closed by one tactic, one library lemma, or
+one discovered lemma plus arithmetic. It is novelty relative to the library
+and the corpus, not to mathematics.
+
+```sh
+proventhru explore --out out/explore --rounds 4 --per-round 80 --step-budget 600 --jobs 4 \
+    --exclude examples/eval_test.txt --exclude examples/eval_test_renamed.txt \
+    --exclude examples/eval_open.txt
+```
+
+Outputs:
+- `corpus.v` compiles on its own;
+- `corpus.jsonl` lists each lemma's proof, prover, round, and the discovered lemmas it cites;
+- `rounds.jsonl` holds per-round counts (gate, corollaries, proved, citing)
+  and the record heads;
+- `round-N/` holds the run records.
+
+It runs on CPU and needs no model.
+
 ## What is not built yet
 
 - **Reflection (grounded critique).** v2, once v1 has a measured baseline;
