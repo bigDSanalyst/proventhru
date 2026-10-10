@@ -147,6 +147,11 @@ class RetrievalPolicy(Policy):
     def reexpand(self):
         return getattr(self.base, "reexpand", 0)
 
+    def select(self, goal, found):
+        """Which of Search's ranked list fill the slots: the first `top`. A
+        learned ranker (ranker.RankedRetrievalPolicy) chooses differently."""
+        return found[: self.top]
+
     def propose(self, obs, path, last_failure=None, tried=None):
         out = list(self.base.propose(obs, path, last_failure, tried=tried) if tried is not None
                    else self.base.propose(obs, path, last_failure))
@@ -154,8 +159,8 @@ class RetrievalPolicy(Policy):
         lemmas = []
         if obs.goals and self.env is not None and self.env.session is not None:
             g = obs.goals[0]
-            lemmas = self.retriever.lemmas(self.env.session,
-                                           terms(g.conclusion, g.hypotheses))[: self.top]
+            lemmas = self.select(g, self.retriever.lemmas(self.env.session,
+                                                          terms(g.conclusion, g.hypotheses)))
         have = {t for t, _ in out}
         added = []
         for i, (name, stmt) in enumerate(lemmas):

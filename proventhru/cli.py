@@ -42,7 +42,12 @@ def _policy(a, preamble):
         from .policy_claude import ClaudePolicy
         pol = ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
                            max_calls=a.max_calls)
-    if a.retrieval:
+    if a.ranker and not a.retrieval:
+        raise SystemExit("--ranker needs --retrieval N")
+    if a.retrieval and a.ranker:
+        from .ranker import Ranker, RankedRetrievalPolicy
+        pol = RankedRetrievalPolicy(pol, Ranker.load(a.ranker), top=a.retrieval)
+    elif a.retrieval:
         from .retrieval import RetrievalPolicy
         pol = RetrievalPolicy(pol, top=a.retrieval)
     return pol
@@ -95,6 +100,8 @@ def _policy_args(p):
                    help="stop calling the model after this many calls (cost cap)")
     p.add_argument("--retrieval", type=int, default=0, metavar="N",
                    help="also offer the N best-matching library lemmas at each node")
+    p.add_argument("--ranker", default=None, metavar="FILE",
+                   help="with --retrieval: a fitted lemma ranker (ranker.py) chooses the N")
 
 
 def main(argv=None):
