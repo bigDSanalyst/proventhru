@@ -46,3 +46,36 @@ A later gate is undefined if an earlier one fails.
    prove the development's main theorems, and with inner citations?
 
 Each gate is reported before the next is built or run.
+
+## Gate 1 result, and gate 2's criteria (2026-10-10, before gate 2 runs)
+
+**Gate 1 passed** (`results/isort-gate1.md`):
+- 53 candidates about the development, all elaborate;
+- 8 of the 9 gold statements were proposed exactly: 5 of the 6 helpers and 3 of the 3
+  main theorems;
+- the ninth, `insert_In`, is an iff, which the generator doesn't build: a limit of the
+  generator, counted as not proposed.
+
+**Gate 2 (proof), measured in this order:**
+1. **Primary:** how many of the 5 proposed gold helpers the loop proves. "Exactly" means
+   the proved corpus lemma is the gold statement up to the names of bound variables
+   only: no swapped sides, no derivation. Each match is confirmed in Coq by closing
+   the gold statement with `exact` and the corpus lemma.
+2. **Secondary:** how many of the 3 main theorems it proves.
+3. **Tertiary, within the pilot (not gate 3):** whether any proof cites a corpus lemma,
+   and at what position (top or inner). With 53 candidates, inner citations aren't
+   expected. If one appears, it's flagged at once.
+4. **Supplement:** gold helpers proved in the other orientation, or present as
+   derivations, each with the stated equivalence.
+
+**Two phases:**
+- **2a:** the existing prover, unchanged: `structural-tactics/v2` + library retrieval +
+  corpus index + saturation, with open statements retried in the next round (the corpus
+  may have the helper by then). This tests whether the loop generalizes to a new
+  development without modification.
+- **2b:** only if 2a leaves gold helpers unproved: a tactic set for the development's
+  predicate (induction on a `sorted` hypothesis, a case on `<=?`), named
+  `structural-tactics/isort/v1` and kept separate from v2. Reported against 2a: the
+  difference is the finding.
+
+**Budget:** 600 steps per candidate, as in the exploration runs.

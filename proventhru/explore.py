@@ -444,8 +444,10 @@ def lemma_text(name, stmt, proof):
     return f"Lemma {name} : {stmt}.\nProof. {' '.join(proof)} Qed.\n"
 
 
-def preamble(corpus):
-    return BASE + ("\n" + "".join(lemma_text(c["name"], c["statement"], c["proof"])
+def preamble(corpus, base=None):
+    """base: what the corpus is stated over (BASE, or a development's
+    definitions: devgen.preamble())."""
+    return (base or BASE) + ("\n" + "".join(lemma_text(c["name"], c["statement"], c["proof"])
                                   for c in corpus) if corpus else "")
 
 
@@ -493,13 +495,13 @@ def certify_drops(forms, coqc="coqc"):
     return [s for s, f in forms if compile_corpus(text([(s, f)]), coqc) != "ok"]
 
 
-def axioms(corpus, coqc="coqc"):
+def axioms(corpus, coqc="coqc", base=None):
     """Print Assumptions on every corpus lemma: {name: [axioms]} for any that
     rests on one. A kernel-checked proof from an axiom proves only what the
     axiom asserts, so the corpus must be closed under the global context."""
     if not corpus:
         return {}
-    text = preamble(corpus) + "\n" + "".join(f"Print Assumptions {c['name']}.\n" for c in corpus)
+    text = preamble(corpus, base) + "\n" + "".join(f"Print Assumptions {c['name']}.\n" for c in corpus)
     d = tempfile.mkdtemp()
     try:
         path = os.path.join(d, "assumptions.v")
@@ -572,7 +574,7 @@ def _load(path):
 def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), seed=2,
             max_term=5, min_size=3, max_size=9, backend="coqtop", retrieval_top=6,
             log=print, statements=None, signature="base", require_new=False,
-            prover="fixed", saturate=False):
+            prover="fixed", saturate=False, base=None, retry_open=False):
     """statements: an explicit candidate list to use instead of the generator
     (tests; or a curated batch). Excluded statements are dropped from it too.
     signature / require_new: explore the wide signature, optionally only its
@@ -581,6 +583,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
     signature do not replay this stream. prover: "fixed" (fixed-tactics/v1
     under both passes), "structural" (structural-tactics/v1) or
     "structural2" (structural-tactics/v2)."""
+    base_pre = base
     base = {"fixed": FixedTactics, "structural": StructuralTactics,
             "structural2": StructuralTacticsV2}[prover]
     os.makedirs(out, exist_ok=True)
@@ -592,7 +595,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
               else candidate_stream(seed, max_term, min_size, max_size, set(exclude), dropped,
                                     signature, tuple(WIDE) if require_new else ()))
     sig = signature + ("+new-only" if require_new else "")
-    requeue, certified, queue, seeded = [], 0, [], set()
+    requeue, certified, queue, seeded, retry = [], 0, [], set(), []
     recorded_small = 0
     srng = random.Random(seed + 7)
     seed_check = (EDGE + [random_env(srng) for _ in range(2000)]
@@ -605,6 +608,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             if done[r].get("signature", "base") == sig:
                 list(zip(range(take), stream))
             requeue, queue = q.get("requeue", []), q.get("seeds", [])
+            retry = q.get("retry", [])
             seeded = set(q.get("seeded", []))
             certified = q.get("certified", certified)
             log(f"round {r}: done before ({done[r]['proved']} proved)")
@@ -615,14 +619,19 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         from_seeds, queue = queue[:cap], queue[cap:]
         take = per_round - len(requeue) - len(from_seeds)
         fresh_batch = [s for _, s in zip(range(take), stream)]
-        batch = list(dict.fromkeys(requeue + [x["statement"] for x in from_seeds] + fresh_batch))
+        # retry_open: what the last round left open comes back first, since the
+        # corpus has grown since (a main theorem needs a helper proved in the
+        # same round it was first tried)
+        batch = list(dict.fromkeys(retry + requeue + [x["statement"] for x in from_seeds]
+                                   + fresh_batch))
+        from_retry, retry = len(retry), []
         seed_of = {x["statement"]: x for x in from_seeds}
         requeue = []
         if not batch:
             log("no candidates left")
             break
         seen_names = {c["name"] for c in corpus}
-        pre = preamble(corpus)
+        pre = preamble(corpus, base_pre)
         rdir = os.path.join(out, f"round-{r}")
         log(f"round {r}: {len(batch)} candidates, corpus {len(corpus)} lemmas")
         os.makedirs(rdir, exist_ok=True)
@@ -679,7 +688,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             if any("as SAT" in t for t in row["proof"]):
                 # cite only the lemmas the proof uses (minimize)
                 row = dict(row, proof=minimize(row["statement"], pre, row["proof"], backend))
-            t = corollary(row["statement"], preamble(corpus + new), corpus + new, backend) \
+            t = corollary(row["statement"], preamble(corpus + new, base_pre), corpus + new,
+                          backend) \
                 if new else None
             if t:
                 derived.append(derivation(row["statement"], t, "after_proof", row["proof"]))
@@ -695,20 +705,24 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                         "kernel": row["kernel"]})
         with open(der_path, "w") as fh:
             fh.writelines(json.dumps(d) + "\n" for d in derived)
+        if retry_open:
+            settled = {c["statement"] for c in corpus + new} | {d["statement"] for d in derived}
+            retry = [x["statement"] for x in rows
+                     if x["standing"] == "open" and x["statement"] not in settled]
         t0 = time.perf_counter()
-        check = compile_corpus(preamble(corpus + new))
+        check = compile_corpus(preamble(corpus + new, base_pre))
         compile_s = round(time.perf_counter() - t0, 2)
         if check != "ok":
             raise RuntimeError(f"round {r}: the corpus does not compile with the new lemmas: "
                                f"{check}")
-        bad = axioms(corpus + new)
+        bad = axioms(corpus + new, base=base_pre)
         if bad:
             raise RuntimeError(f"round {r}: corpus lemmas rest on axioms: {bad}")
         corpus += new
         with open(corpus_path, "a") as fh:
             fh.writelines(json.dumps(c) + "\n" for c in new)
         with open(os.path.join(out, "corpus.v"), "w") as fh:
-            fh.write(preamble(corpus))
+            fh.write(preamble(corpus, base_pre))
         # The number-only drops are certified, not just tested: each one's
         # nat law is proved by lia / nia. One that is not goes back to the
         # prover in the next round.
@@ -742,7 +756,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                    "seeds_proposed": len(fresh_seeds),
                    "proved_from_seeds": sum(c["source"] != "generator" for c in new),
                    "axiom_free": True,
-                   "queue_after": {"requeue": requeue, "seeds": queue,
+                   "from_retry": from_retry,
+                   "queue_after": {"requeue": requeue, "seeds": queue, "retry": retry,
                                    "seeded": sorted(seeded), "certified": certified},
                    "dropped_before_gate_so_far": {k: v for k, v in dropped.items()
                                                   if k not in ("nat_forms",

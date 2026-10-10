@@ -16,6 +16,12 @@ plus a few list functions:
                 (a conditional law, as QuickSpec's conditional equations)
 Only candidates that mention one of the development's own symbols are kept:
 laws about rev and ++ alone are the library's, not the development's.
+
+A standing rule for every evaluator here: the inputs must cover what could
+falsify a candidate, not what is easy to construct. The first version made l2
+a permutation of l1 only in its sorted form, so `Permutation l1 l2 ->
+sorted l2` passed every test. A premise that holds only on inputs of one
+shape tests nothing beyond that shape.
 """
 import itertools
 import os
