@@ -406,6 +406,28 @@ class TestParse(unittest.TestCase):
         self.assertEqual(a.key, b.key)
 
 
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestCoqtopWarnings(unittest.TestCase):
+    def test_a_deprecated_lemma_is_a_success_not_an_error(self):
+        """Coq prints "Toplevel input, characters ..." before a deprecation
+        warning as well as before an error. A success that names a deprecated
+        lemma must be recorded as a success, or the session's path and
+        coqtop's state drift apart (the D600 crash on the v5 test run)."""
+        from proventhru.session import open_session
+        s = open_session("Require Import Arith Lia List.",
+                         "forall (l1 l2 : list nat), length (removelast l1) <= length l1 + list_max l2",
+                         "coqtop")
+        try:
+            h, _ = s.run(s.root, "intros.")
+            h2, obs = s.run(h, "rewrite le_plus_r.")          # deprecated since 8.16
+            self.assertIn("?Goal", obs.goals[0].conclusion)
+            # back at intros., the goal has no a - b + b: a fresh rewrite must fail
+            with self.assertRaises(Exception):
+                s.run(h, "rewrite Nat.sub_add.")
+        finally:
+            s.close()
+
+
 class TestEnv:
     BACKEND = None
     def setUp(self):

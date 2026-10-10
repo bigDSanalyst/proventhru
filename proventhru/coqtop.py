@@ -21,7 +21,14 @@ import subprocess
 import time
 
 PROMPT = re.compile(r"<prompt>\S* < (\d+) \|[^<]*\| \d+ < </prompt>")
-ERROR = re.compile(r"^(Error:|Toplevel input, characters)", re.M)
+# An error is an "Error:" line. "Toplevel input, characters ..." is only the
+# location header Coq prints before an error *or a warning*: a tactic that
+# succeeds while naming a deprecated lemma prints that header, then a
+# <warning> block, then the new goals. Treating the header as an error
+# recorded such successes as failures while coqtop's state moved on.
+ERROR = re.compile(r"^Error:", re.M)
+WARNING = re.compile(r"(Toplevel input, characters[^\n]*\n(?:>[^\n]*\n)*)?<warning>.*?</warning>\n?",
+                     re.S)
 
 
 from . import goals as goalparse
@@ -72,7 +79,13 @@ class Coqtop:
         self.proc.stdin.write(sentence.strip().encode() + b"\n")
         text, state = self._read(deadline or self.deadline)
         text = re.sub(r"</?infomsg>", "", text)
-        err = bool(ERROR.search(text))
+        err = bool(ERROR.search(WARNING.sub("", text)))
+        if err and self.state is not None and state != self.state:
+            # coqtop leaves its state where it was when a sentence fails. If
+            # the state moved, the classification is wrong; stop rather than
+            # let the session's path and coqtop's state drift apart.
+            raise RuntimeError(f"coqtop reported an error but moved from state "
+                               f"{self.state} to {state} on {sentence!r}")
         if not err:
             self.state = state
         return text, state, err
