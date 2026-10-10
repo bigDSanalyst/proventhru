@@ -16,14 +16,17 @@ Theory exploration over the stdlib nat and list nat signature, in rounds:
                lemmas the gate tries now include every lemma discovered so
                far, so an instance of something already found is not new.
                Before the gate, a candidate that follows from one discovered
-               lemma by arithmetic (pose proof (L l1); lia) is set aside as
-               a corollary, in round-N/corollaries.jsonl.
+               lemma by arithmetic (pose proof (L l1); lia) is recorded as a
+               derivation citing that lemma, in round-N/derived.jsonl.
   4. prove     the open ones at a step budget, split in half: the fixed
                tactics (A) on every candidate, then fixed tactics plus
-               retrieval (B) on what A left open. Retrieval's Search sees the discovered
+               retrieval (B) on what A left open. B's retrieval also offers
+               each discovered lemma it retrieves as pose proof (L x); lia. Retrieval's Search sees the discovered
                lemmas, so later proofs can cite earlier discoveries.
-  5. keep      every kernel-certified proof becomes a Lemma in the corpus,
-               loaded in the preamble of every later round.
+  5. keep      kernel-certified proofs, smallest first; one that follows
+               from a lemma admitted before it (this round's included) is a
+               derivation, the rest become Lemmas in the corpus, loaded in
+               the preamble of every later round.
 
 What stays fixed (the truth layer): the kernel certifies every lemma, and
 the whole corpus is recompiled from scratch after every round. The gate
@@ -51,7 +54,7 @@ import tempfile
 from collections import Counter
 
 from . import record as rec
-from .conjecture import (EDGE, canonical_names, candidates, enumerate_classes, holds,
+from .conjecture import (EDGE, L, N, canonical_names, candidates, enumerate_classes, holds,
                          nat_instance, random_env, statement)
 from .env import DEFAULT_PREAMBLE
 from .pipeline import RECORD, run
@@ -83,6 +86,51 @@ def corollary_tactics(stmt, corpus):
         pools = [[v for v, ty in goal if ty == t] for _, t in need]
         for args in itertools.product(*pools):
             yield f"intros; pose proof ({' '.join((c['name'],) + args)}); lia."
+
+
+def hypothesis_vars(hypotheses):
+    """{type: [names]} for the nat and list nat variables of a goal's context
+    ('l1 : list nat', 'n, m : nat')."""
+    out = {}
+    for h in hypotheses:
+        names, _, ty = h.partition(" : ")
+        if ty.strip() in (L, N):
+            out.setdefault(ty.strip(), []).extend(x.strip() for x in names.split(","))
+    return out
+
+
+class CorpusRetrievalPolicy(RetrievalPolicy):
+    """Retrieval (B), and for each discovered lemma among the lemmas Search
+    retrieved for this goal, also `pose proof (L x ..); lia` with the goal's
+    variables: apply only closes a goal the lemma matches exactly, and a
+    discovered inequality is mostly used inside arithmetic. Only retrieved
+    lemmas get the form, so the candidates grow with what the goal mentions,
+    not with the size of the corpus."""
+
+    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3):
+        super().__init__(base, top, score)
+        self.corpus = {c["name"]: c for c in corpus}
+        self.per_lemma = per_lemma
+        self.identity = dict(self.identity, id=f"retrieval/v1+corpus-lia/v1+{base.identity['id']}")
+
+    def propose(self, obs, path, last_failure=None, tried=None):
+        out = super().propose(obs, path, last_failure, tried)
+        cost = self.last_cost
+        if not obs.goals:
+            return out
+        ctx = hypothesis_vars(obs.goals[0].hypotheses)
+        have = {t for t, _ in out}
+        for i, name in enumerate(cost.get("lemmas", [])):
+            if name not in self.corpus:
+                continue
+            pools = [ctx.get(ty, []) for _, ty in binders(self.corpus[name]["statement"])]
+            for args in itertools.islice(itertools.product(*pools), self.per_lemma):
+                t = f"pose proof ({' '.join((name,) + args)}); lia."
+                if t not in have:
+                    have.add(t)
+                    out.append((t, self.score + 0.05 - 0.01 * i))
+                    cost["added"].append(t)
+        return out
 
 
 def corollary(stmt, pre, corpus, backend="coqtop", timeout=2):
@@ -125,6 +173,15 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
             stats["nat_instance"] = stats.get("nat_instance", 0) + 1
         else:
             yield s
+
+
+def derivation(stmt, script, stage, proof=None):
+    """A statement derived from discovered lemmas: the script cites them.
+    stage: before_gate (from earlier rounds' lemmas, so never searched) or
+    after_proof (proved this round, then found to follow from a smaller
+    lemma admitted before it); proof is the search's own proof then."""
+    return {"statement": stmt, "script": script, "cites": sorted(set(LEMMA_NAME.findall(script))),
+            "stage": stage, "proof": proof}
 
 
 def lemma_text(name, stmt, proof):
@@ -182,15 +239,18 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         rdir = os.path.join(out, f"round-{r}")
         log(f"round {r}: {len(batch)} candidates, corpus {len(corpus)} lemmas")
         os.makedirs(rdir, exist_ok=True)
-        cor_path = os.path.join(rdir, "corollaries.jsonl")
-        if os.path.exists(cor_path):
-            cors = _load(cor_path)
+        # Derived: follows from one discovered lemma by arithmetic. Kept as
+        # a derivation that cites the lemma, not as a new lemma.
+        der_path = os.path.join(rdir, "derived.jsonl")
+        if os.path.exists(der_path):
+            derived = [d for d in _load(der_path) if d["stage"] == "before_gate"]
         else:
-            cors = [{"statement": x, "script": t} for x in batch
-                    for t in [corollary(x, pre, corpus, backend)] if t]
-            with open(cor_path, "w") as fh:
-                fh.writelines(json.dumps(c) + "\n" for c in cors)
-        batch = [x for x in batch if x not in {c["statement"] for c in cors}]
+            derived = [derivation(x, t, "before_gate") for x in batch
+                       for t in [corollary(x, pre, corpus, backend)] if t]
+            with open(der_path, "w") as fh:
+                fh.writelines(json.dumps(d) + "\n" for d in derived)
+        offered = len(batch)
+        batch = [x for x in batch if x not in {d["statement"] for d in derived}]
         # Two provers, half the step budget each: fixed tactics (A) on every
         # candidate, then fixed tactics + retrieval (B) on what A left open.
         # They prove different things (results/v5-test-results.md): A goes
@@ -207,7 +267,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             run(left, os.path.join(rdir, "retrieval"), pre, budget=None,
                 step_budget=step_budget - half, backend=backend, jobs=jobs,
                 log=lambda *_: None,
-                policy_factory=lambda: RetrievalPolicy(FixedTactics(), top=retrieval_top))
+                policy_factory=lambda: CorpusRetrievalPolicy(FixedTactics(), corpus,
+                                                             top=retrieval_top))
             second = rec.load(os.path.join(rdir, "retrieval", RECORD))
             rows = [x for x in rows if x["standing"] != "open"] + rec.corpus(second)
         eps = {e["data"]["episode"]: e["data"] for e in first if e["kind"] == "episode"}
@@ -218,9 +279,19 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             gate[g.get("status")] += 1
             if g.get("status") == "trivial" and LEMMA_NAME.search(" ".join(g.get("script") or [])):
                 known_by_corpus += 1
+        # Admit smallest first, each checked against everything admitted
+        # before it, this round's lemmas included: a lemma that follows from
+        # a smaller one found in the same round is a derivation too.
         new, citing = [], 0
-        for row in rows:
-            if row["standing"] != "proved" or row["statement"] in {c["statement"] for c in corpus}:
+        known = {c["statement"] for c in corpus}
+        proved = sorted((x for x in rows if x["standing"] == "proved"
+                         and x["statement"] not in known),
+                        key=lambda x: (len(x["statement"]), x["statement"]))
+        for row in proved:
+            t = corollary(row["statement"], preamble(corpus + new), corpus + new, backend) \
+                if new else None
+            if t:
+                derived.append(derivation(row["statement"], t, "after_proof", row["proof"]))
                 continue
             name = f"pt_r{r}_{len(new)}"
             cites = sorted(set(LEMMA_NAME.findall(" ".join(row["proof"]))) & seen_names)
@@ -229,6 +300,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                         "round": r, "episode": row["episode"], "cites": cites,
                         "prover": (row.get("policy") or {}).get("id"),
                         "kernel": row["kernel"]})
+        with open(der_path, "w") as fh:
+            fh.writelines(json.dumps(d) + "\n" for d in derived)
         check = compile_corpus(preamble(corpus + new))
         if check != "ok":
             raise RuntimeError(f"round {r}: the corpus does not compile with the new lemmas: "
@@ -240,17 +313,21 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             fh.write(preamble(corpus))
         heads = {k: list(rec.head(rec.load(os.path.join(rdir, k, RECORD))))
                  for k in ("fixed", "retrieval") if os.path.exists(os.path.join(rdir, k, RECORD))}
-        summary = {"round": r, "candidates": len(batch),
+        summary = {"round": r, "candidates": offered,
                    "dropped_before_gate_so_far": dict(dropped), "gate": dict(gate),
                    "known_by_corpus": known_by_corpus,
-                   "corollaries_of_corpus": len(cors),
+                   "derived_before_gate": sum(d["stage"] == "before_gate" for d in derived),
+                   "derived_after_proof": sum(d["stage"] == "after_proof" for d in derived),
                    "searched": gate.get("open", 0), "proved": len(new),
-                   "proofs_citing_corpus": citing, "corpus_size": len(corpus),
+                   "proofs_citing_corpus": citing,
+                   # every place the corpus did work: closed at the gate by one
+                   # lemma, derived from one, or cited inside a new proof
+                   "uses_of_corpus": known_by_corpus + len(derived) + citing, "corpus_size": len(corpus),
                    "preamble_sha256": rec.sha256(pre), "record_heads": heads}
         with open(summary_path, "a") as fh:
             fh.write(json.dumps(summary) + "\n")
         done[r] = summary
         log(f"round {r}: gate {dict(gate)}; {known_by_corpus} already known from the corpus, "
-            f"{len(cors)} arithmetic corollaries of it; "
+            f"{len(derived)} derived from it; "
             f"proved {len(new)} new ({citing} citing earlier lemmas); corpus {len(corpus)}")
     return corpus, [done[k] for k in sorted(done)]

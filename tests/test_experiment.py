@@ -434,9 +434,36 @@ class TestExplore(unittest.TestCase):
             corpus, rounds = explore(out, rounds=2, per_round=1, step_budget=600,
                                      statements=[lemma, weaker], log=lambda *_: None)
             self.assertEqual([c["statement"] for c in corpus], [lemma])
-            self.assertEqual(rounds[1]["corollaries_of_corpus"], 1)
-            with open(os.path.join(out, "round-1", "corollaries.jsonl")) as fh:
-                self.assertIn("pose proof (pt_r0_0 l1); lia.", fh.read())
+            self.assertEqual(rounds[1]["derived_before_gate"], 1)
+            with open(os.path.join(out, "round-1", "derived.jsonl")) as fh:
+                d = json.loads(fh.readline())
+            self.assertEqual(d["script"], "intros; pose proof (pt_r0_0 l1); lia.")
+            self.assertEqual(d["cites"], ["pt_r0_0"])
+
+    def test_a_lemma_that_follows_from_a_smaller_one_of_its_round_is_derived(self):
+        from proventhru.explore import explore
+        lemma = "forall (l1 : list nat), list_max l1 <= list_sum l1"
+        weaker = "forall (l1 : list nat) (n : nat), (list_max l1) - n <= list_sum l1"
+        with tempfile.TemporaryDirectory() as out:
+            corpus, rounds = explore(out, rounds=1, per_round=2, step_budget=600,
+                                     statements=[weaker, lemma], log=lambda *_: None)
+            self.assertEqual([c["statement"] for c in corpus], [lemma])
+            self.assertEqual(rounds[0]["derived_after_proof"], 1)
+
+    def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
+        from types import SimpleNamespace as NS
+        from proventhru.explore import CorpusRetrievalPolicy
+        from proventhru.search import FixedTactics
+        pol = CorpusRetrievalPolicy(FixedTactics(), [
+            {"name": "pt_r0_0", "statement": "forall (l1 : list nat), list_max l1 <= list_sum l1"}])
+        pol.retriever.lemmas = lambda *_: [("pt_r0_0", "forall l1 : list nat, ..."),
+                                           ("Nat.le_refl", "forall n : nat, n <= n")]
+        pol.env = NS(session=object())
+        goal = NS(conclusion="list_max l1 - n <= list_sum l1",
+                  hypotheses=["l1 : list nat", "n : nat"])
+        cands = [t for t, _ in pol.propose(NS(goals=[goal]), [])]
+        self.assertIn("pose proof (pt_r0_0 l1); lia.", cands)
+        self.assertNotIn("pose proof (Nat.le_refl n); lia.", cands)   # library lemmas: unchanged
 
 
 class Unavailable(RuntimeError):

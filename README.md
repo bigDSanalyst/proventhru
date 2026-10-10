@@ -294,14 +294,18 @@ proventhru report out/A600/records.jsonl out/C600/records.jsonl
 2. **tests** each one on 2,000 random inputs, and drops instances of laws
    over `nat` alone: `0 * list_sum l = 0` is `0 * a = 0`, which is true of any
    number, so it says nothing about lists;
-3. sets aside **corollaries**, candidates that `pose proof (L l1); lia`
-   closes with one lemma `L` found earlier;
+3. records **derivations**: a candidate that `pose proof (L l1); lia` closes
+   with one lemma `L` found earlier is kept as a derivation citing `L`, not as
+   a new lemma;
 4. **gates** the rest. Trivial now also means closed by one discovered lemma;
 5. **proves** what is open with half the step budget on fixed tactics, then
-   half on fixed tactics + retrieval for what is left;
-6. **keeps** every kernel-certified proof as a `Lemma pt_rN_k` in the corpus,
-   which is in the preamble of every later round. So retrieval and later
-   proofs can cite it.
+   half on fixed tactics + retrieval for what is left. Discovered lemmas are
+   in the preamble, so Coq's `Search` retrieves them like library lemmas, and
+   each one retrieved is also offered as `pose proof (L x); lia`;
+6. **keeps** kernel-certified proofs smallest first. One that follows from a
+   lemma admitted before it, from the same round included, is a derivation.
+   The rest become `Lemma pt_rN_k` in the corpus, in the preamble of every
+   later round.
 
 The whole corpus is recompiled from scratch after every round. The held-out
 and dev statements are excluded (`--exclude`), so the corpus can't leak into
@@ -318,8 +322,9 @@ proventhru explore --out out/explore --rounds 4 --per-round 80 --step-budget 600
 Outputs:
 - `corpus.v` compiles on its own;
 - `corpus.jsonl` lists each lemma's proof, prover, round, and the discovered lemmas it cites;
-- `rounds.jsonl` holds per-round counts (gate, corollaries, proved, citing)
-  and the record heads;
+- `round-N/derived.jsonl` lists the derivations, each with the lemmas it cites;
+- `rounds.jsonl` holds per-round counts (gate, derived, proved, citing, and
+  `uses_of_corpus`, every place a discovered lemma did work) and the record heads;
 - `round-N/` holds the run records.
 
 It runs on CPU and needs no model.
