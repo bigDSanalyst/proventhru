@@ -63,3 +63,58 @@ path depth alone. A phase reading that only matches the reward adds nothing.
 
 No pruning and no reward from the reading. No claim that a phase reading is a phase in
 oscillate's sense.
+
+## Amendment, 2026-10-10, before any record is read for this purpose
+
+"Chosen on run 8" was ambiguous between a hand-written formula and a fitted model. It's
+replaced by a formula, fixed here and not fitted on anything. Run 8 is used only to check
+that the computation runs and the outcomes are well defined. Run 9 is the one test.
+
+**Signals,** all in each step record's `session` field:
+- `ok`: the outcome is `ok`;
+- `dg`: goals closed, `goals_before - goals_after`;
+- `ds`: the relative shrink of the conclusion, `(size_before - size_after) / size_before`;
+- `revisit`;
+- `depth`: the tactic path's length plus one.
+
+`err20` and `rev20` are the shares of errors (any outcome but `ok`) and of revisits among
+the episode's previous 20 steps (fewer at the start; 0 if there are none).
+
+**The reading:**
+
+    order = (ds + 0.5 * sign(dg) if ok else 0) - err20 - rev20
+
+- ordered if `order > 0.1`;
+- disordered if `order < -0.3`;
+- edge otherwise.
+
+Higher `order` is predicted to mean closer to a proof. The direction is fixed: an AUC
+below 0.5 counts as below threshold, not as a flipped signal.
+
+**Outcome 1, step level:** among `ok` steps of proved episodes, is the step on the final
+proof (its path plus its tactic a prefix of the proof)? Error steps are excluded:
+they're never on a proof, so including them would make any reading look good.
+
+**Outcome 2, episode level:** among episodes with at least 50 steps (not proved within
+them), does the episode end proved? The episode's reading is the mean of `order` over
+its first 50 steps. Episodes that ended sooner are excluded, because a short episode is
+mostly a quick proof, and length alone would predict the outcome.
+
+**Measures:**
+- **Primary:** AUC of the continuous `order` for each outcome.
+- **Also reported:** AUC of the three-way regime (ordered 2, edge 1, disordered 0), and
+  the two baselines: the step's recorded reward (episode level: the mean over the first
+  50 steps), and depth (episode level: the mean over the first 50 steps).
+- **Pooling:** both prover passes (`fixed/` and `retrieval/`) of every round.
+
+**Decision**, on run 9, as stated above:
+- primary AUC ≥ 0.70 on both outcomes: keep;
+- below 0.60 on both: drop (record v2);
+- otherwise inconclusive.
+
+Either way, if the reading doesn't beat the reward baseline, it adds nothing the record
+doesn't already carry, and that's reported as such.
+
+**A null is a result.** If the reading fails the 0.60 threshold, the finding is that
+phase-state observation of this form doesn't predict proof outcomes in this domain. It's
+reported as a negative result, and it is what justifies the schema change.
