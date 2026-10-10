@@ -50,6 +50,25 @@ exactly run 8's 15**, by statement: unknown 9 (`filter` commuting with `rev` or
 statements), combined 4, library 1, rev 1. Saturation removed what was composition and
 left the rest untouched, as the subclassification predicted.
 
+## What the null is about
+
+Nine runs, 244 lemmas, 146 citations, none inside an induction. That's information
+about this signature (`nat` and `list nat` with these functions), not about the loop
+or about a model:
+- Every statement proved here closes by a fixed proof shape, or by a chain of corpus
+  lemmas at the top.
+- None of the 19 left open needs a corpus lemma inside an induction: the interior probe
+  found none, with a lemma-free control.
+
+Two limits on that claim:
+- It covers what the generator proposed and the provers tried. It doesn't show that no
+  statement over this signature needs an inner use.
+- A proof found top-level doesn't rule out an inner one existing. Search takes the
+  first proof it finds.
+
+But a loop that never meets such a statement can't measure whether a model helps with
+one. So the next experiment changes the signature, not the prover.
+
 ## Against the stopping rule and the model spec
 
 - **Inner citations: 0,** at 244 lemmas, with composition working.
@@ -58,6 +77,6 @@ left the rest untouched, as the subclassification predicted.
   run 9 is about its ceiling. Candidate generation without a policy now proves nearly
   everything it can reach, and the loop never uses a lemma inside an induction.
 
-`docs/model-experiment-spec.md` chose R from run 8. Running it on run 9 instead needs an
-amendment first. Run 9's R would be the 19 open statements minus false and gap, which
-is under 20, so by the spec the primary outcome would be descriptive only.
+`docs/model-experiment-spec.md` chose R from run 8, and its trigger didn't fire there. It
+isn't amended or run: on this signature it can't produce the signal it exists to
+detect. It stays registered for the next signature.
