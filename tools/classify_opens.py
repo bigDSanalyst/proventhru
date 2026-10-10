@@ -21,9 +21,11 @@ run's final corpus loaded. Its class is the first rung that closes it:
      terms allow, at its variables and subterms, then one lia / nia: a chain
      of several discovered lemmas (removelast and filter are monotone, max is
      at most the sum), at the top.
-  3v outside the vocabulary: closed only by tactics the prover never offers:
-     revert a number before induction (firstn, skipn), case on the tail in
-     the step case (removelast), or case on an if (filter).
+  3v outside the vocabulary: closed only by proof shapes the run's prover
+     (--prover) did not have: those of structural-tactics/v1 (a case on the
+     tail, on an if, a number reverted first) and /v2 (a case on a match
+     keeping its equation, simpl again after a library rewrite). The run's
+     own shapes are rung 1.
   F  false: refuted by wider random inputs than the generator's (values to
      100, lists to 12). It passed the generator's tests (0..5) only.
   3  unexplained: no rung closes it. It may need a lemma the corpus lacks, a
@@ -80,7 +82,7 @@ def open_statements(run):
     return {s: r for s, r in opens.items() if s not in settled}
 
 
-def ladder(stmt, corpus):
+def ladder(stmt, corpus, prover="fixed"):
     """[(class, script)] in the order tried."""
     lists = [v for v, ty in binders(stmt) if ty == "list nat"]
     goal = _goal_terms(stmt)
@@ -122,24 +124,46 @@ def ladder(stmt, corpus):
         for a1 in fills(c1, goal, 2):
             for a2 in fills(c2, goal, 2):
                 two.append(f"intros; {REWRITES}; pose proof ({a1}); pose proof ({a2}); {CLOSE}.")
-    vocab = []
+    shapes = {"structural": [], "structural2": []}
     nats = [v for v, ty in binders(stmt) if ty == "nat"]
     ifs = "repeat match goal with |- context [if ?b then _ else _] => destruct b end"
+    cases_eq = ("repeat match goal with |- context [match ?x with _ => _ end] => "
+                "let E := fresh in destruct x eqn:E end")
+    close_eq = ("first [lia | nia | congruence | (rewrite IH; reflexivity) | "
+                "(f_equal; assumption)]")
+    again = "rewrite ?list_max_app, ?list_sum_app, ?app_length in *; simpl in *"
     for v in lists:
-        # case on the tail in the step case (removelast), on an if (filter)
-        vocab += [f"intros; induction {v} as [|a t IH]; simpl in *; [{CLOSE} | destruct t; "
-                  f"simpl in *; try {REWRITES}; {CLOSE}].",
-                  f"intros; induction {v} as [|a t IH]; simpl in *; {ifs}; simpl in *; "
-                  f"try {REWRITES}; {CLOSE}."]
+        # structural-tactics/v1: a case on the tail in the step case
+        # (removelast), on an if (filter), a number reverted first (skipn)
+        shapes["structural"] += [
+            f"intros; induction {v} as [|a t IH]; simpl in *; [{CLOSE} | destruct t; "
+            f"simpl in *; try {REWRITES}; {CLOSE}].",
+            f"intros; induction {v} as [|a t IH]; simpl in *; {ifs}; simpl in *; "
+            f"try {REWRITES}; {CLOSE}."]
         for n in nats:
-            vocab.append(f"intros; revert {n}; induction {v} as [|a t IH]; intros [|{n}]; "
-                         f"simpl in *; try specialize (IH {n}); try {REWRITES}; {CLOSE}.")
+            shapes["structural"].append(
+                f"intros; revert {n}; induction {v} as [|a t IH]; intros [|{n}]; "
+                f"simpl in *; try specialize (IH {n}); try {REWRITES}; {CLOSE}.")
+        # structural-tactics/v2: a case on a match simpl leaves, keeping its
+        # equation; simpl again after a library rewrite
+        shapes["structural2"] += [
+            f"intros; induction {v} as [|a t IH]; simpl in *; {cases_eq}; simpl in *; "
+            f"{cases_eq}; simpl in *; {close_eq}.",
+            f"intros; induction {v} as [|a t IH]; simpl in *; {again}; {ifs}; simpl in *; "
+            f"{CLOSE}."]
+    vocab = []
     for v in lists:
         for n in nats:
             vocab += [f"intros; revert {n}; induction {v}; intros [|{n}]; simpl in *; "
                       f"try {REWRITES}; {CLOSE}.",
                       f"intros; revert {n}; induction {v}; intros; simpl in *; "
                       f"try {REWRITES}; {CLOSE}."]
+    # a shape the run's prover had is rung 1 (search missed it); one it
+    # lacked is 3v (outside its vocabulary)
+    inside = {"fixed": [], "structural": ["structural"],
+              "structural2": ["structural", "structural2"]}[prover]
+    for k, ss in shapes.items():
+        (one if k in inside else vocab)[:0] = ss
     return [("1", s) for s in one] + [("2", s) for s in two] + [("3v", s) for s in vocab]
 
 
@@ -167,12 +191,12 @@ def saturation(stmt, corpus, cap=60):
     return f"intros; {'; '.join(poses[:cap])}; {CLOSE}." if poses else None
 
 
-def classify(stmt, pre, corpus, backend="coqtop", timeout=3):
+def classify(stmt, pre, corpus, backend="coqtop", timeout=3, prover="fixed"):
     if false_by_wider_tests(stmt):
         return "F", "counterexample with wider random inputs"
     s = open_session(pre, stmt, backend)
     try:
-        steps = ladder(stmt, corpus)
+        steps = ladder(stmt, corpus, prover)
         for cls in ("1", "2", "2s", "3v"):
             if cls == "2s":
                 sat = saturation(stmt, corpus)
@@ -192,6 +216,8 @@ def main(argv=None):
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out", default=None)
     ap.add_argument("--backend", default="coqtop")
+    ap.add_argument("--prover", choices=["fixed", "structural", "structural2"], default="fixed",
+                    help="the run's prover: its shapes are rung 1, the others rung 3v")
     a = ap.parse_args(argv)
     corpus = _load(os.path.join(a.run, "corpus.jsonl"))
     pre = preamble(corpus)
@@ -200,7 +226,7 @@ def main(argv=None):
 
     def one(s):
         try:
-            return classify(s, pre, corpus, a.backend)
+            return classify(s, pre, corpus, a.backend, prover=a.prover)
         except Exception as e:      # does not elaborate etc.
             return "error", f"{type(e).__name__}: {str(e)[:200]}"
     with ThreadPoolExecutor(a.jobs) as ex:
