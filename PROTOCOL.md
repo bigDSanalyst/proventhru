@@ -8,11 +8,13 @@ behind it. A change is an amendment: a new commit, logged at the bottom with
 its reason, so it has a new hash, and the records show which version each
 run was under.
 
-Stage: **v2, development** (v2 adds the limitations, the M1-first
-sequence, the choice of M1 and the Colab install rule). The sets, environment, conditions, budgets and
-analysis are fixed. No prompt and no model are frozen yet, so model policies
-may run on the dev set only. The amendment that freezes the prompt and names
-the models opens the held-out sets to them.
+Stage: **v5, frozen.** The prompt, the model, its serving and its settings
+are registered (v2 added the limitations, the M1-first sequence and the
+Colab install rule; v3 moved M1 to 7B on an A100; v4 froze; v5 replaced
+v4's prompt before any held-out model run, see Amendments). Held-out runs of
+M1 may now start. Nothing in this protocol changes again before they are
+reported, except by an amendment that says why and repeats the runs it
+affects.
 
 ## Questions
 
@@ -87,6 +89,9 @@ The Colab run (the primary model) must install exactly Coq 8.18.0, and the
 fixed baselines are compared with model runs on that same prover version.
 The record's `environment.prover` is the evidence for this.
 
+**Everything runs in Colab**, the baseline reruns included, so every
+condition shares one machine image and one Coq build.
+
 **Colab install.** Colab's apt Coq is older than 8.18, so Coq 8.18.0 is
 installed with opam (about 15 to 20 minutes), and the opam switch is cached
 on Google Drive so later sessions reuse it. Using apt's Coq and noting the
@@ -136,22 +141,23 @@ run only if at least one of M1's primary comparisons is significant (below).
 Running M2 then costs no extra Colab and vLLM setup until there is something
 for it to check.
 
-- **M1: `Qwen/Qwen2.5-3B-Instruct`, pinned by revision hash, served by vLLM
-  in Colab, fp16, temperature 0.** M1 is the model that is fine-tuned
-  afterwards (DPO, then GRPO), so it is chosen as the model those can
-  actually run on: one free Colab T4 (16 GB, no bf16). A 3B model serves in
-  fp16 with room for the KV cache, and trains with LoRA in fp16 on that GPU.
-  A 7B model would need quantising to serve on a T4 (the fine-tuned and
-  served weights would then differ by a quantisation step), and GRPO on 7B
-  does not fit at all. The weights are pinned by the Hugging Face revision
-  (commit) hash, not by name. The baseline, the DPO model and the GRPO model
-  are the same weights at that revision, plus each stage's adapter, served
-  the same way. The freezing amendment records the revision hash and the
-  vLLM version, and `models` registers the served name
-  `Qwen/Qwen2.5-3B-Instruct@<revision>`. If a larger GPU becomes the
-  standing setup, a 7B M1 is a new amendment made before any held-out M1
-  run, never after one.
-- **M2 (if run): a second open-weight family, in Colab the same way.** At up
+- **M1: `Qwen/Qwen2.5-7B-Instruct`, pinned by revision hash, served by vLLM
+  in Colab on an A100, bf16, temperature 0.** M1 is the model that is
+  fine-tuned afterwards (DPO, then GRPO), so it is chosen as the model those
+  can run on with the hardware the whole line uses: a Colab A100 (bf16).
+  7B serves there in bf16 without quantisation, and trains with LoRA in bf16.
+  The weights are pinned by the Hugging Face revision (commit) hash, not by
+  name. The baseline, the DPO model and the GRPO model are the same weights
+  at that revision, plus each stage's adapter, served the same way: same
+  dtype, same vLLM version, same GPU class. The freezing amendment records
+  the revision hash, the vLLM version and the GPU, and `models` registers
+  the served name `Qwen/Qwen2.5-7B-Instruct@<revision>`.
+  **The A100 is part of the setup, not a convenience.** If a later stage
+  can't get an A100, it waits. It doesn't move to a smaller GPU or a
+  quantised copy, because that would make it a different model from the
+  baseline.
+- **M2 (if run): a second open-weight family, in Colab the same way (A100,
+  bf16).** At up
   to about 12,000 calls (about 14M tokens) per low-budget run on `test`, the
   HF router's free allowance can't carry a held-out run. The router is used
   for prompt tuning on `dev` only.
@@ -206,6 +212,18 @@ model's.
 
 **Secondary** (reported, not tested for significance unless stated):
 
+- **retrieval-solved vs retrieval-unsolved.** A `test` statement is
+  retrieval-solved if B proves it at the same step budget in the rerun under
+  this version. C and D are reported within each half, with A and B, so it
+  shows whether the model adds anything where lemma lookup already works and
+  where it doesn't.
+- **budget used.** For each condition: steps used out of steps allowed, and
+  how many searches ended at the step budget, by running out of candidates
+  (frontier), or by a proof. On dev, M1 without retrieval used about 12% of
+  its budget and ended by frontier in 21 of 21 unproved searches
+  (`results/dev-conditions-600steps.md`). A comparison where one side
+  cannot use the effort it is matched on is reported as that, not as a
+  plain loss.
 - M1's two comparisons at the high step budget
 - Q3: C on `test` vs C on `test_renamed`, by item, McNemar, per model run
 - invocations per proof and per statement
@@ -224,6 +242,33 @@ model's.
 budgets) after looking at held-out results. Any such change is a new
 amendment, and the held-out runs are repeated under it. Results under the
 earlier version are still reported.
+
+## The frozen policy (v5)
+
+Tuned on `dev` only, over five rounds recorded in
+`results/dev-conditions-600steps.md` (sha256 `0a75506889a4afff6c0b121b0667e94949235349274840344be9350f1ab9e5e3`).
+Final dev numbers at 600 steps: A 10, B 15, C 7, D 12 of 29. The fifth
+round was the last, as agreed before it ran, and the prompt was frozen
+without regard to its numbers.
+
+- Prompt `e26d4a7732dc48875af2cd566141a41ae7a939bb66ffd0bb0d794caba54f1ee4`,
+  the code of commit `3c60b52` (`policy_openai.PROMPT`, `schema_for` with
+  arity per tactic, `view.state`, the vocabulary and the arity rules).
+- Model `Qwen/Qwen2.5-7B-Instruct` at revision
+  `a09a35458c702b33eeacc393d103063234e8bc28`, served by vLLM 0.31.0 in
+  bf16 on an NVIDIA A100-SXM4-40GB, under the served name in `models`.
+- Settings, checked on every held-out run (`model_settings`): k = 5, up to
+  3 re-asks per state shown what was tried there, `json_schema` output,
+  temperature 0, seed 0, at most 400 output tokens.
+- Search: best-first with re-asking for policies that set `reexpand`
+  (`search.best_first`). The fixed policies don't re-ask, and their search
+  is unchanged from v1: the dev baseline reproduces exactly.
+
+**C and D replace the fixed list; they don't add to it.** D is retrieval
+around the model, as B is retrieval around the fixed tactics. Whether the
+model adds anything to the fixed list (fixed + retrieval + model) is a
+different question. It is asked after these runs are reported, by its own
+amendment.
 
 ## Limitations
 
@@ -290,10 +335,21 @@ Checked by `protocol.check()` on every run.
   "openai-compat/v1",
   "retrieval/v1+openai-compat/v1"
  ],
- "prompts": [],
- "models": [],
+ "prompts": [
+  "e26d4a7732dc48875af2cd566141a41ae7a939bb66ffd0bb0d794caba54f1ee4"
+ ],
+ "models": [
+  "Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28"
+ ],
  "k": 5,
- "retrieval_top": 6
+ "retrieval_top": 6,
+ "model_settings": {
+  "reexpand": 3,
+  "response_format": "json_schema",
+  "temperature": 0.0,
+  "seed": 0,
+  "max_tokens": 400
+ }
 }
 ```
 
@@ -302,4 +358,7 @@ Checked by `protocol.check()` on every run.
 | version | commit | change | why |
 |---|---|---|---|
 | v1 | `1e6b8ef` | first registration: sets, environment, conditions, budgets, analysis. No prompt or model frozen | |
-| v2 | (this commit) | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
+| v2 | `53fcdde` | Limitations section; M1 first, M2 only if M1's primary comparison is significant; M1 = Qwen2.5-3B-Instruct (revision pinned at the freeze); Colab installs Coq 8.18.0 by opam, with the fallback rule; baselines rerun under the version model runs use. Frozen block unchanged | The v1 baselines (A = B = 22 at 600 steps, 26 vs 32 at 2000) needed their reading fixed before any model result; M2 needs a reason to exist first; the fine-tuning target has to be chosen as the baseline |
+| v3 | `b18a0ad` | M1 = Qwen2.5-7B-Instruct, bf16, on a Colab A100 (was 3B fp16 on a T4); the A100 is fixed for baseline, DPO and GRPO; everything, baselines included, runs in Colab. Frozen block unchanged | An A100 is available: 7B then serves and trains without quantisation, which was the only reason for 3B. Made before any M1 call, as v2 requires |
+| v4 | `2140c7c` | **Freeze** (superseded by v5 before any held-out model run). Registers the prompt (`9d5a3e60…`), M1 at revision `a09a3545…` served by vLLM 0.31.0 bf16 on an A100-SXM4-40GB, and `model_settings` (reexpand 3, json_schema, temperature 0, seed 0, max 400 tokens); search re-asks for model policies; secondary analyses: retrieval-solved split, budget used. Cites `results/dev-conditions-600steps.md` | The stopping rule: one hygiene round after the re-asking change, then freeze whatever the dev numbers, so the test result cannot have been tuned toward |
+| v5 | (this commit) | **Freeze, replacing v4's prompt** with `e26d4a77…`: hygiene round 2, arity in the output schema (an argument is `""` for lia, reflexivity, ...; non-empty for rewrite, destruct, induction, ...) plus filled right/wrong examples. Everything else as v4. Cites the dev file with round 5 | After v4 froze, round 4's drop list showed arity errors in ~30% of the model's output (1,276 empty arguments of 1,455 invalid), which would have mixed a formatting bug into a capability comparison. Checked before amending: no model run on `test` or `test_renamed` existed (Colab `runs/` listing). Agreed in advance as the last round; frozen whatever it showed (C 8 to 7, D 12 to 12, invalid 1,455 to 90) |

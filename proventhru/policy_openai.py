@@ -45,44 +45,127 @@ import urllib.error
 import urllib.request
 
 from . import view
-from .policy_claude import SCHEMA, VOCABULARY, assemble
+from .policy_claude import NEEDS_ARGUMENT, NULLARY, SCHEMA, VOCABULARY, assemble
 from .record import canon
 from .search import Policy
 
-PROMPT = """You choose the next tactic in an interactive Coq (Rocq) proof.
+PROMPT = """You choose the next tactic in an interactive Coq (Rocq) proof search.
 
 You are given the current proof state as JSON: every open goal with its
 hypotheses, the tactic path taken so far, and, when the last attempt failed,
 that tactic and Coq's exact error message. The first goal is the one the next
 tactic acts on.
 
-Propose up to {k} candidate tactics for the next step, best first. Each
-candidate is one tactic name from the allowed list, plus its argument:
+Propose exactly {k} distinct candidate tactics for the next step, best first.
+The search tries them in order and keeps every one that makes progress, so
+{k} genuinely different ideas are worth more than {k} variations of one.
+Each candidate is one tactic name from the allowed list, plus its argument:
 
 - the argument is whatever follows the name, without the final period:
   hypothesis or variable names from the state ("n", "H as [x Hx]"), a term
-  ("(S n)"), or a standard-library lemma name ("Nat.add_comm", "<- IHn",
-  "app_nil_r"); use "" when the tactic takes none.
+  ("(S n)"), or a standard-library lemma name ("Nat.add_comm", "<- IHn");
+  use "" when the tactic takes none.
 - one tactic per candidate: no ";", no "||", no "try", no second sentence.
-- candidates must differ from each other. Prefer a step that makes progress
-  on the first goal over one that only restates it.
 - if the last failure is shown, do not repeat that tactic at the same path;
   read Coq's message for why it failed.
+- `tried_here` lists the tactics already tried at this exact state and what
+  came of each. When it is not empty, every candidate must be a tactic not
+  in it: new ideas, not repeats.
+- Arity. lia, nia, reflexivity, assumption, trivial, congruence, split,
+  f_equal, left and right take no argument: give "". They read the goal and
+  every hypothesis by themselves, so `lia` already uses IHn; never write
+  "lia IHn" or "assumption H". rewrite, apply, exact, unfold, induction,
+  destruct and exists always need one: the hypothesis, lemma, variable or
+  term they act on. intros, simpl and auto work either way (intros "" or
+  intros "n"; simpl "" or simpl "in IHn").
+
+How these goals are usually proved:
+
+- A statement about a recursive function (length, rev, app, map, filter,
+  list_sum, Nat.add, Nat.mul, ...) of a variable usually needs `induction` on
+  that variable: on a list when the functions recurse on the list, on a nat
+  when they recurse on the number. Introduce the variables first if they are
+  still quantified (`intros`), then induct; include an induction among your
+  candidates whenever the goal mentions a recursive function of a variable.
+- In an inductive step, `simpl` unfolds the functions on the constructor, and
+  the induction hypothesis (IHl, IHn, ...) is then used with `rewrite` or
+  closes a goal with `lia` once the recursive parts are hypotheses.
+- `lia` closes linear arithmetic over nat, and treats `length l`, `list_sum
+  l`, ... as opaque numbers: it succeeds only once the needed facts about
+  them are in the hypotheses. `nia` handles products.
+- `reflexivity`, `auto`, `trivial` close goals that are equal after
+  computation; `simpl` alone does not close anything.
+- When a tactic just failed, Coq's message says why: an unknown name, a goal
+  that is not arithmetic, a rewrite that found no match. Change the idea, not
+  the spelling.
+
+Arity, filled in. The tactics that act on something always name it:
+
+Goal: forall l1 l2 : list nat, rev (l1 ++ l2) = rev l2 ++ rev l1, after intros l1 l2
+  right: rewrite rev_app_distr.      wrong: rewrite.
+Goal: forall n : nat, n * n >= n
+  right: destruct n.                 wrong: destruct.
+  right: induction n.                wrong: induction.
+Goal: n <= m -> exists k, m = n + k, with H : n <= m
+  right: exists (m - n).             wrong: exists.
+Goal: m = n + (m - n), with H : n <= m
+  right: lia.                        wrong: lia H.
+
+Four examples of a good answer:
+
+State: {{"goals": [{{"type": "forall n : nat, n + 0 = n", "hypotheses": []}}], "path": [], "last_failure": null}}
+Answer: {{"candidates": [{{"tactic": "intros", "argument": "n"}}, {{"tactic": "induction", "argument": "n"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "auto", "argument": ""}}, {{"tactic": "intros", "argument": ""}}]}}
+
+State: {{"goals": [{{"type": "S n + 0 = S n", "hypotheses": [{{"name": "n", "type": "nat"}}, {{"name": "IHn", "type": "n + 0 = n"}}]}}], "path": ["intros n.", "induction n.", "reflexivity."], "last_failure": null}}
+Answer: {{"candidates": [{{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "IHn"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "f_equal", "argument": ""}}, {{"tactic": "congruence", "argument": ""}}]}}
+
+State: {{"goals": [{{"type": "length (rev l) <= length l", "hypotheses": [{{"name": "l", "type": "list nat"}}]}}], "path": ["intros l."], "last_failure": {{"tactic": "lia.", "outcome": "error", "error": "Tactic failure: Cannot find witness."}}}}
+Answer: {{"candidates": [{{"tactic": "induction", "argument": "l"}}, {{"tactic": "destruct", "argument": "l"}}, {{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "rev_length"}}, {{"tactic": "auto", "argument": ""}}]}}
+
+State: {{"goals": [{{"type": "length ((a0 :: l) ++ [a]) = S (length (a0 :: l))", "hypotheses": [{{"name": "a", "type": "nat"}}, {{"name": "a0", "type": "nat"}}, {{"name": "l", "type": "list nat"}}, {{"name": "IHl", "type": "length (l ++ [a]) = S (length l)"}}]}}], "path": ["intros a l.", "induction l.", "reflexivity."], "last_failure": null}}
+Answer: {{"candidates": [{{"tactic": "simpl", "argument": ""}}, {{"tactic": "rewrite", "argument": "IHl"}}, {{"tactic": "lia", "argument": ""}}, {{"tactic": "simpl", "argument": "in IHl"}}, {{"tactic": "auto", "argument": ""}}]}}
+(lia with "" uses IHl by itself; rewrite names IHl because it must; simpl appears twice, once on the goal and once on a hypothesis.)
 
 Allowed tactic names: {vocab}.
 
 The libraries loaded are given by the preamble: {preamble}
 
-Reply with one JSON object and nothing else, in exactly this form:
-{{"candidates": [{{"tactic": "induction", "argument": "l"}}, {{"tactic": "simpl", "argument": ""}}]}}"""
+Reply with one JSON object and nothing else, in the form of the answers above."""
 
-USER = "the proof state: view.state(obs, path, last_failure) as json.dumps(sort_keys=True)"
+USER = ("the proof state: view.state(obs, path, last_failure, tried) as "
+        "json.dumps(sort_keys=True)")
+
+
+def schema_for(k):
+    """Exactly k candidates, and each one's argument shaped by its tactic's
+    arity, so constrained decoding (json_schema) cannot emit an arity error:
+    lia/reflexivity/... with an argument, or rewrite/destruct/... without
+    one. The tactic name was already an enum; this does the same for the
+    argument. (Under json_object the checks in assemble still apply.)"""
+    def branch(names, argument):
+        return {"type": "object",
+                "properties": {"tactic": {"type": "string", "enum": sorted(names)},
+                               "argument": argument},
+                "required": ["tactic", "argument"], "additionalProperties": False}
+
+    other = set(VOCABULARY) - NULLARY - NEEDS_ARGUMENT
+    item = {"anyOf": [branch(NULLARY, {"type": "string", "enum": [""]}),
+                      branch(NEEDS_ARGUMENT, {"type": "string", "minLength": 1}),
+                      branch(other, {"type": "string"})]}
+    return {"type": "object",
+            "properties": {"candidates": {"type": "array", "items": item,
+                                          "minItems": k, "maxItems": k}},
+            "required": ["candidates"], "additionalProperties": False}
 
 
 def prompt_sha256():
-    """Everything that decides what the model is shown and asked for."""
+    """Everything that decides what the model is shown and asked for: the
+    template, the schema (and how k shapes it), the vocabulary, and the code
+    that renders the state."""
     return hashlib.sha256(canon({
-        "template": PROMPT, "user": USER, "schema": SCHEMA, "vocabulary": list(VOCABULARY),
+        "template": PROMPT, "user": USER, "schema": SCHEMA,
+        "schema_for": inspect.getsource(schema_for), "vocabulary": list(VOCABULARY),
+        "nullary": sorted(NULLARY), "needs_argument": sorted(NEEDS_ARGUMENT),
         "view": inspect.getsource(view),
     }).encode()).hexdigest()
 
@@ -172,7 +255,7 @@ class OpenAICompatPolicy(Policy):
     def __init__(self, preamble, model, base_url, key_env="HF_TOKEN", k=5, temperature=0.0,
                  seed=0, max_tokens=400, response_format="json_object", cache=None,
                  transport=None, retries=6, backoff=2.0, max_backoff=60.0, timeout=120,
-                 max_calls=None, sleep=time.sleep, provider=None):
+                 max_calls=None, sleep=time.sleep, provider=None, reexpand=3):
         self.model, self.base_url = model, base_url.rstrip("/")
         self.key_env, self.k = key_env, k
         self.temperature, self.seed, self.max_tokens = temperature, seed, max_tokens
@@ -181,12 +264,14 @@ class OpenAICompatPolicy(Policy):
         self.transport = transport or HTTPTransport()
         self.retries, self.backoff, self.max_backoff = retries, backoff, max_backoff
         self.timeout, self.max_calls, self.calls, self.sleep = timeout, max_calls, 0, sleep
+        self.reexpand = reexpand
         self.system = PROMPT.format(k=k, vocab=", ".join(VOCABULARY),
                                     preamble=preamble.strip() or "(none)")
         self.identity = {"id": "openai-compat/v1", "model": model,
                          "provider": provider or self.base_url, "base_url": self.base_url,
                          "k": k, "temperature": temperature, "seed": seed,
                          "max_tokens": max_tokens, "response_format": response_format,
+                         "reexpand": reexpand,
                          "prompt_sha256": prompt_sha256(), "vocabulary": list(VOCABULARY)}
         self.last_cost = None
 
@@ -198,7 +283,7 @@ class OpenAICompatPolicy(Policy):
                 "max_tokens": self.max_tokens}
         if self.response_format == "json_schema":
             body["response_format"] = {"type": "json_schema", "json_schema": {
-                "name": "candidates", "schema": SCHEMA, "strict": True}}
+                "name": "candidates", "schema": schema_for(self.k), "strict": True}}
         elif self.response_format == "json_object":
             body["response_format"] = {"type": "json_object"}
         return body
@@ -243,12 +328,12 @@ class OpenAICompatPolicy(Policy):
         raise ModelUnavailable(f"{self.model} at {self.base_url}: status {status} after "
                                f"{cost['retries']} retries", cost)
 
-    def propose(self, obs, path, last_failure=None):
+    def propose(self, obs, path, last_failure=None, tried=None):
         if self.max_calls is not None and self.calls >= self.max_calls:
             self.last_cost = {"model": self.model, "skipped": "max_calls reached"}
             return []
         self.calls += 1
-        state = view.state(obs, path, last_failure)
+        state = view.state(obs, path, last_failure, tried)
         cost = {"model": self.model, "served_model": None, "served_provider": None,
                 "input_tokens": 0, "output_tokens": 0, "model_ms": None,
                 "stop_reason": None, "request_id": None, "dropped": [], "failure": None,

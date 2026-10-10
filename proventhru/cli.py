@@ -37,7 +37,7 @@ def _policy(a, preamble):
                                  key_env=a.key_env or None, k=a.k, temperature=a.temperature,
                                  seed=a.seed, response_format=a.response_format,
                                  cache=a.cache, max_calls=a.max_calls,
-                                 provider=a.provider)
+                                 provider=a.provider, reexpand=a.reexpand)
     else:
         from .policy_claude import ClaudePolicy
         pol = ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
@@ -79,6 +79,8 @@ def _policy_args(p):
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cache", default=None, help="openai: response cache file (JSONL)")
+    p.add_argument("--reexpand", type=int, default=3,
+                   help="openai: times a node may be re-asked, shown what was tried there")
     p.add_argument("--provider", default=None,
                    help="openai: what serves the model, recorded in the identity "
                         "(e.g. 'vllm 0.6.6.post1, fp16, T4'); default: the base URL")

@@ -66,6 +66,8 @@ class TestOpenAICompat(unittest.TestCase):
         b = r["body"]
         self.assertEqual((b["model"], b["temperature"], b["seed"]), ("org/m:together", 0.0, 7))
         self.assertEqual(b["response_format"]["type"], "json_schema")
+        cands = b["response_format"]["json_schema"]["schema"]["properties"]["candidates"]
+        self.assertEqual((cands["minItems"], cands["maxItems"]), (5, 5))   # exactly k
         self.assertIn("Allowed tactic names: intros", b["messages"][0]["content"])
         state = json.loads(b["messages"][1]["content"])
         self.assertEqual(state["path"], ["intros n."])
@@ -250,6 +252,14 @@ class TestProtocol(unittest.TestCase):
                 check(p2, PRE, self.STMTS, dict(model, k=8), self.ENV, search)
             with self.assertRaisesRegex(ProtocolError, "prompt"):
                 check(p2, PRE, self.STMTS, dict(model, prompt_sha256="0" * 64), self.ENV, search)
+            write_protocol(d, self.frozen(prompts=[prompt_sha256()],
+                                          model_settings={"reexpand": 3, "temperature": 0.0}))
+            commit(d)
+            p3 = load(path)
+            ok = dict(model, reexpand=3, temperature=0.0)
+            self.assertEqual(check(p3, PRE, self.STMTS, ok, self.ENV, search)["set"], "test")
+            with self.assertRaisesRegex(ProtocolError, "reexpand"):
+                check(p3, PRE, self.STMTS, dict(ok, reexpand=7), self.ENV, search)
 
 
 @unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
@@ -274,6 +284,96 @@ class TestStepBudget(unittest.TestCase):
         self.assertTrue({"ok", "error", "refused"} <= outcomes)
         self.assertEqual(res.record()["invocations"], res.expansions)
         self.assertEqual(res.expansions, 2)            # 4 + 3 tactics: the cap fell mid-node
+
+
+@unittest.skipUnless(HAVE_COQ, "coqtop/coqc not in PATH")
+class TestReask(unittest.TestCase):
+    def test_a_node_is_reasked_with_what_was_tried_and_repeats_cost_nothing(self):
+        from proventhru.env import CoqEnv
+        from proventhru.search import best_first, Policy
+
+        class Narrow(Policy):
+            """Two ideas per ask, repeating one of the old ones on a re-ask."""
+            identity = {"id": "narrow", "model": None, "provider": None}
+            reexpand = 2
+
+            def __init__(self):
+                self.asks = []
+
+            def propose(self, obs, path, last_failure=None, tried=None):
+                self.asks.append((tuple(path), [t["tactic"] for t in tried or []]))
+                if not path and tried is None:
+                    return [("exact I.", 1.0), ("intros n.", 0.9)]
+                if not path:
+                    return [("exact I.", 1.0), ("simpl.", 0.9)]  # exact I. again: no step
+                return [("exact I.", 1.0)]                       # children get nowhere
+
+        pol = Narrow()
+        with CoqEnv("forall n : nat, n * n >= n", PRE, backend="coqtop") as env:
+            res = best_first(env, pol, budget=None, step_budget=50)
+        root_asks = [t for p, t in pol.asks if p == ()]
+        self.assertEqual(root_asks[0], [])                       # first ask: nothing tried
+        self.assertEqual(root_asks[1], ["exact I.", "intros n."])  # re-ask: what was tried
+        root_steps = [s.tactic for s in res.steps if s.parent == ()]
+        self.assertEqual(root_steps, ["exact I.", "intros n.", "simpl."])  # repeat skipped
+        self.assertEqual(len(root_asks), 3)                      # 1 + reexpand, then no news
+
+    def test_reasks_stop_after_reexpand_and_count_as_invocations(self):
+        from proventhru.env import CoqEnv
+        from proventhru.search import best_first, Policy
+
+        class Stuck(Policy):
+            identity = {"id": "stuck", "model": None, "provider": None}
+            reexpand = 3
+
+            def __init__(self):
+                self.n = 0
+
+            def propose(self, obs, path, last_failure=None, tried=None):
+                self.n += 1
+                return [(f"exact I{self.n}.", 1.0)] if not path else []
+
+        pol = Stuck()
+        with CoqEnv("forall n : nat, n * n >= n", PRE, backend="coqtop") as env:
+            res = best_first(env, pol, budget=None, step_budget=50)
+        self.assertEqual(res.stopped, "frontier")
+        self.assertEqual(pol.n, 4)                               # 1 ask + 3 re-asks
+        self.assertEqual(res.expansions, 4)
+
+
+class TestAritySchema(unittest.TestCase):
+    def test_the_schema_partitions_the_vocabulary_and_forbids_arity_errors(self):
+        from proventhru.policy_openai import schema_for
+        from proventhru.policy_claude import VOCABULARY
+        s = schema_for(5)
+        branches = s["properties"]["candidates"]["items"]["anyOf"]
+        names = [n for b in branches for n in b["properties"]["tactic"]["enum"]]
+        self.assertEqual(sorted(names), sorted(VOCABULARY))
+        self.assertEqual(len(names), len(set(names)))
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        jsonschema.validate({"candidates": [{"tactic": "induction", "argument": "l"}] * 5}, s)
+        for bad in ({"tactic": "lia", "argument": "IHn"}, {"tactic": "destruct", "argument": ""},
+                    {"tactic": "omega", "argument": ""}):
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate({"candidates": [bad] * 5}, s)
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.validate({"candidates": [{"tactic": "lia", "argument": ""}] * 4}, s)
+
+
+class TestNullary(unittest.TestCase):
+    def test_arguments_on_nullary_tactics_are_refused_before_a_step(self):
+        from proventhru.policy_claude import assemble
+        self.assertIsNone(assemble("lia", "n * n - n")[0])
+        self.assertIsNone(assemble("reflexivity", "H")[0])
+        self.assertEqual(assemble("lia", "")[0], "lia.")
+        self.assertEqual(assemble("induction", "n")[0], "induction n.")
+        self.assertIsNone(assemble("rewrite", "")[0])
+        self.assertIsNone(assemble("induction", " ")[0])
+        self.assertEqual(assemble("intros", "")[0], "intros.")
+        self.assertEqual(assemble("simpl", "in IHl")[0], "simpl in IHl.")
 
 
 class Unavailable(RuntimeError):

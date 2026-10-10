@@ -27,10 +27,14 @@ class Policy:
     identity = {"id": "unknown", "model": None, "provider": None}
     last_cost = None
 
-    def propose(self, obs, path, last_failure=None):
+    reexpand = 0
+
+    def propose(self, obs, path, last_failure=None, tried=None):
         """Return [(tactic, score)], higher score tried first. last_failure is
         the most recent refused or timed-out attempt in this episode,
-        {path, tactic, outcome, error} with Coq's message verbatim, or None."""
+        {path, tactic, outcome, error} with Coq's message verbatim, or None.
+        tried is given only on a re-ask (reexpand > 0): the tactics already
+        tried at this node, each {tactic, outcome, result}."""
         raise NotImplementedError
 
 
@@ -41,7 +45,7 @@ class FixedTactics(Policy):
                "assumption.", "trivial.", "nia."]
     SHAPERS = ["intros.", "simpl.", "split.", "constructor.", "f_equal."]
 
-    def propose(self, obs, path, last_failure=None):
+    def propose(self, obs, path, last_failure=None, tried=None):
         out = [(t, 1.0) for t in self.CLOSERS] + [(t, 0.5) for t in self.SHAPERS]
         if obs.goals:
             g = obs.goals[0]
@@ -96,7 +100,16 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
     retrieval proposes counts once it is tried as a tactic. The search stops
     before the step that would exceed step_budget, even in the middle of a
     node's candidates, so two policies matched on steps ran exactly as many
-    tactics, however many candidates each offers per call."""
+    tactics, however many candidates each offers per call.
+
+    Re-expansion. A policy with `reexpand = R > 0` may be asked again at a
+    node, up to R more times, after an expansion of that node produced at
+    least one new tactic. The re-ask passes `tried=[...]`, every tactic
+    already tried at that node with what came of it, so a deterministic
+    model can propose different ideas. Each re-ask is one more invocation.
+    A tactic already tried at a node is skipped without a step, so repeats
+    (retrieval appending the same lemmas on each ask) cost nothing. The
+    fixed policies have R = 0: they offer all their ideas at once."""
     t0 = time.perf_counter()
     root = env.reset()
     if hasattr(policy, "bind"):
@@ -106,6 +119,9 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
     seen = {root.obs.key}
     steps, expansions = [], 0
     last_failure = None
+    tried = {}     # node path -> [{"tactic", "outcome", "result"}] tried there
+    visits = {}    # node path -> times expanded
+    again = getattr(policy, "reexpand", 0) or 0
 
     def unproved(why):
         return SearchResult(env.statement, False, (), None, steps, expansions,
@@ -120,8 +136,15 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
         if node.depth >= max_depth:
             continue
         expansions += 1
+        n = visits.get(node.path, 0)
+        visits[node.path] = n + 1
+        here = tried.setdefault(node.path, [])
         try:
-            candidates = policy.propose(node.obs, node.path, last_failure)
+            if n:
+                candidates = policy.propose(node.obs, node.path, last_failure,
+                                            tried=[dict(t) for t in here])
+            else:
+                candidates = policy.propose(node.obs, node.path, last_failure)
         except Exception as e:
             # A policy that fails (a model API that stayed down) still leaves
             # its call in the record, with the failure in its cost.
@@ -131,11 +154,22 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
             raise
         prop = (episode.proposal(node.path, policy.identity, candidates, policy.last_cost)
                 if episode else None)
+        done_here = {t["tactic"] for t in here}
+        new = 0
         for tactic, score in candidates:
+            if tactic in done_here:
+                continue
             if step_budget is not None and len(steps) >= step_budget:
                 return unproved("step_budget")
             st = env.step(node, tactic)
             steps.append(st)
+            done_here.add(tactic)
+            new += 1
+            here.append({"tactic": st.tactic, "outcome": st.outcome,
+                         "result": (st.error or "")[:160] if st.outcome != "ok" else
+                         ("finished" if st.done else
+                          "back to a state already seen" if st.signals.get("revisit")
+                          else "new state")})
             if episode:
                 episode.step(st, proposal=prop)
             if st.outcome != "ok":
@@ -153,4 +187,7 @@ def best_first(env: CoqEnv, policy: Policy, budget=200, max_depth=12, episode=No
             seen.add(st.node.obs.key)
             heapq.heappush(frontier, (cost - st.reward - 0.01 * score
                                       + 0.001 * st.node.obs.size, next(tie), st.node))
+        if again and n < again and new:
+            # ask again later, after this node's new children have had a turn
+            heapq.heappush(frontier, (cost + 0.05 * (n + 1), next(tie), node))
     return unproved("frontier")

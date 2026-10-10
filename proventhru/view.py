@@ -14,7 +14,9 @@ This is the whole of a model-backed policy's world, so it is fixed here, once:
       ],
       "path": ["intros n.", "induction n."],
       "last_failure": {"path": [...], "tactic": "lia.", "outcome": "error",
-                       "error": "<the exact string Coq returned>"}
+                       "error": "<the exact string Coq returned>"},
+      "tried_here": [{"tactic": "lia.", "outcome": "error",
+                      "result": "<Coq's message, first 160 characters>"}, ...]
     }
 
 - goals: every goal with its own hypotheses. The coqtop backend prints only the
@@ -27,6 +29,10 @@ This is the whole of a model-backed policy's world, so it is fixed here, once:
 - last_failure: the most recent attempt in this episode that Coq or the guard
   refused, or that timed out, with Coq's message verbatim, never summarised.
   null until something fails.
+- tried_here: on a re-ask at the same node (search.best_first, reexpand),
+  every tactic already tried there and what came of it: Coq's message, or
+  "new state", "back to a state already seen", "finished". Empty on the
+  first ask.
 """
 
 
@@ -47,7 +53,7 @@ def hypotheses(h):
     return out
 
 
-def state(obs, path, last_failure=None):
+def state(obs, path, last_failure=None, tried=None):
     """The view of one node: obs is a goals.Observation, path its tactic path."""
     return {
         "goal_count": len(obs.goals),
@@ -58,4 +64,5 @@ def state(obs, path, last_failure=None):
                   for g in obs.goals],
         "path": list(path),
         "last_failure": last_failure,
+        "tried_here": list(tried or []),
     }

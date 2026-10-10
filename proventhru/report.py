@@ -149,6 +149,10 @@ def summarize(entries):
         "provers": provers,
         "search": searched[0]["search"] if searched else None,
         "invocations": sum((r.get("stats") or {}).get("expansions", 0) for r in rows),
+        "stopped": dict(Counter((r.get("stats") or {}).get("stopped") or "proved"
+                                for r in searched)),
+        "candidates_per_call": (round(sum(len(p["candidates"]) for p in proposals)
+                                      / len(proposals), 2) if proposals else None),
         "failures": failures(proposals, steps),
         "by_item": {r["item"]: r["standing"] == "proved" for r in searched
                     if r.get("item") is not None},
@@ -201,6 +205,11 @@ def render(paths):
         if s["incomplete"]:
             out.append(f"   INCOMPLETE: {len(s['incomplete'])} statements have no finished "
                        f"episode; this is not a result yet")
+        stop = s["stopped"]
+        out.append(f"   searches ended by: {stop}  candidates per call {s['candidates_per_call']}")
+        if s["search"] and s["search"].get("step_budget") and stop.get("frontier"):
+            out.append(f"   !! {stop['frontier']} searches ran out of candidates before the step "
+                       f"budget: they did not use the effort the comparison matches on")
         out.append(f"   steps {s['steps']} {s['outcomes']}  invocations {s['invocations']}"
                    f"  model calls {s['model_calls']}  no-candidate calls {s['no_candidates']}")
         f = s["failures"]

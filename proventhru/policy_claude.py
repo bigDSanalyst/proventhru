@@ -80,6 +80,15 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
+# Tactics that take no argument here: an argument is a sure Coq error, so it
+# is refused before it costs a step ("lia n", "reflexivity H").
+NULLARY = {"lia", "nia", "reflexivity", "assumption", "trivial", "congruence", "split",
+           "f_equal", "left", "right"}
+
+# Tactics that act on something named: without an argument they are a sure
+# error here (`rewrite.`, `apply.`), refused before they cost a step.
+NEEDS_ARGUMENT = {"rewrite", "apply", "exact", "unfold", "induction", "destruct", "exists"}
+
 # What an argument may not contain: a tactical, a comment, or a second sentence.
 BAD_ARGUMENT = re.compile(r";|\|\||\(\*|\.\s|\.$|\n|\btry\b|\brepeat\b|\bdo\b")
 
@@ -97,6 +106,10 @@ def assemble(tactic, argument):
     if tactic not in VOCABULARY:
         return None, f"{tactic!r} is not in the vocabulary"
     arg = (argument or "").strip()
+    if arg and tactic in NULLARY:
+        return None, f"{tactic} takes no argument (got {arg!r})"
+    if not arg and tactic in NEEDS_ARGUMENT:
+        return None, f"{tactic} needs an argument"
     if BAD_ARGUMENT.search(arg):
         return None, f"argument {arg!r} is more than one tactic's argument"
     return (f"{tactic} {arg}".strip() + "."), None
@@ -136,12 +149,12 @@ class ClaudePolicy(Policy):
             kw.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
         return self.client.beta.messages.create(**kw)
 
-    def propose(self, obs, path, last_failure=None):
+    def propose(self, obs, path, last_failure=None, tried=None):
         if self.max_calls is not None and self.calls >= self.max_calls:
             self.last_cost = {"model": self.model, "skipped": "max_calls reached"}
             return []
         self.calls += 1
-        state = view.state(obs, path, last_failure)
+        state = view.state(obs, path, last_failure, tried)
         t0 = time.perf_counter()
         resp = self._request(state)
         ms = (time.perf_counter() - t0) * 1000
