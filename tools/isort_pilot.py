@@ -106,13 +106,96 @@ def gate1(out, jobs=4):
     return summary
 
 
+def gate2(out, jobs=4, prover="structural2", rounds=3, label="2a", corpus_forms="pose"):
+    """Gate 2 (proof): the loop on gate 1's candidates, the development as the
+    preamble, open statements retried each round. Gold matched exactly (bound
+    variable names only), each confirmed in Coq with exact."""
+    from proventhru.explore import citation_sites, explore, preamble
+    from proventhru.session import open_session
+    from proventhru.gate import _first_closing
+    gate1_rows = [json.loads(ln) for ln in open(os.path.join(os.path.dirname(out), "gate1",
+                                                             "candidates.jsonl"))]
+    stmts = [r["statement"] for r in gate1_rows]
+    base = devgen.preamble()
+    run_dir = os.path.join(out, "run")
+    pv = devgen.isort_tactics() if prover == "isort" else prover
+    corpus, rounds_ = explore(run_dir, rounds=rounds, per_round=len(stmts), step_budget=600,
+                              jobs=jobs, prover=pv, saturate=True, base=base,
+                              retry_open=True, statements=stmts, log=print,
+                              corpus_forms=corpus_forms)
+    by_stmt = {devgen.canonical(c["statement"]): c for c in corpus}
+    derived = {}
+    for r in range(rounds):
+        p = os.path.join(run_dir, f"round-{r}", "derived.jsonl")
+        if os.path.exists(p):
+            for ln in open(p):
+                d = json.loads(ln)
+                derived[devgen.canonical(d["statement"])] = d
+    pre = preamble(corpus, base)
+    gold = {}
+    for name, (st, role) in GOLD.items():
+        if st is None:
+            gold[name] = {"role": role, "result": "not expressible"}
+            continue
+        c = devgen.canonical(st)
+        hit = by_stmt.get(c)
+        res = {"role": role, "statement": c}
+        if hit:
+            s = open_session(pre, c, "coqtop")
+            try:
+                ok = _first_closing(s, [f"exact {hit['name']}.", f"intros; apply {hit['name']}."], 5)
+            finally:
+                s.close()
+            res.update(result="proved exactly" if ok else "matched but not confirmed",
+                       lemma=hit["name"], proof=hit["proof"], cites=hit["cites"],
+                       sites=citation_sites(hit["proof"], {x["name"] for x in corpus}))
+        else:
+            sw = swapped(c)
+            if sw and sw in by_stmt:
+                res.update(result="proved, other orientation", lemma=by_stmt[sw]["name"])
+            elif c in derived:
+                res.update(result="derived", script=derived[c]["script"])
+            else:
+                res.update(result="not proved")
+        gold[name] = res
+    names = {c["name"] for c in corpus}
+    sites = [dict(x, lemma_of=c["name"]) for c in corpus for x in citation_sites(c["proof"], names)]
+    summary = {
+        "phase": label, "prover": prover, "corpus_forms": corpus_forms, "candidates": len(stmts), "rounds": rounds,
+        "corpus": len(corpus),
+        "proved_by_round": [r["proved"] for r in rounds_],
+        "derived": sum(r["derived_before_gate"] + r["derived_after_proof"] for r in rounds_),
+        "gold": gold,
+        "gold_helpers_proved_exactly": sum(g.get("result") == "proved exactly"
+                                           for g in gold.values() if g["role"] == "helper"),
+        "gold_main_proved_exactly": sum(g.get("result") == "proved exactly"
+                                        for g in gold.values() if g["role"] == "main"),
+        "citing_proofs": sum(bool(c["cites"]) for c in corpus),
+        "citations_top": sum(not x["inner"] for x in sites),
+        "citations_inner": sum(x["inner"] for x in sites),
+        "inner_sites": [x for x in sites if x["inner"]],
+        "axiom_free": all(r["axiom_free"] for r in rounds_),
+    }
+    with open(os.path.join(out, f"gate2{label}.json"), "w") as fh:
+        json.dump(summary, fh, indent=1)
+    print(json.dumps(summary, indent=1))
+    return summary
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("gate", choices=["gate1"])
+    ap.add_argument("gate", choices=["gate1", "gate2"])
+    ap.add_argument("--prover", default="structural2")
+    ap.add_argument("--label", default="2a")
+    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--corpus-forms", default="pose", choices=["pose", "all"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args(argv)
-    gate1(a.out, a.jobs)
+    if a.gate == "gate1":
+        gate1(a.out, a.jobs)
+    else:
+        gate2(a.out, a.jobs, a.prover, a.rounds, a.label, a.corpus_forms)
 
 
 if __name__ == "__main__":

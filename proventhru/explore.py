@@ -246,14 +246,20 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
     arithmetic, which apply cannot use."""
 
     def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3, top_corpus=4,
-                 saturate=False, saturate_cap=30):
+                 saturate=False, saturate_cap=30, corpus_forms="pose"):
         super().__init__(base, top, score)
         self.saturate, self.saturate_cap = saturate, saturate_cap
+        # "pose": pose proof (L x); lia only (as through run 9). "all": also
+        # rewrite L, rewrite <- L and apply L, which find the instance by
+        # unification (insert_length at sort t, inside an induction)
+        self.corpus_forms = corpus_forms
         self.retriever = LibraryRetriever()
         self.corpus = [(c["name"], c["statement"], lemma_terms(c["statement"])) for c in corpus]
         self.per_lemma, self.top_corpus = per_lemma, top_corpus
         self.identity = dict(self.identity,
-                             id=f"retrieval/v1+corpus-index/v2{'+saturate/v1' if saturate else ''}"
+                             id=f"retrieval/v1+corpus-index/v2"
+                                f"{'+forms/v1' if corpus_forms == 'all' else ''}"
+                                f"{'+saturate/v1' if saturate else ''}"
                                 f"+{base.identity['id']}")
 
     def corpus_lemmas(self, conclusion, hypotheses=()):
@@ -275,6 +281,14 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         cost["corpus_lemmas"] = [n for n, _ in found]
         mine = []
         for i, (name, stmt) in enumerate(found):
+            if self.corpus_forms == "all":
+                concl = stmt.rsplit(" -> ", 1)[-1]
+                forms = ([f"rewrite {name}.", f"rewrite <- {name}."] if " = " in concl else [])
+                forms += [f"apply {name}.", f"eapply {name}; eassumption."]
+                for t in forms:
+                    if t not in have:
+                        have.add(t)
+                        mine.append((t, self.score + 0.04 - 0.01 * i))
             pools = [ctx.get(ty, []) for _, ty in binders(stmt)]
             for args in itertools.islice(itertools.product(*pools), self.per_lemma):
                 t = f"pose proof ({' '.join((name,) + args)}); lia."
@@ -574,7 +588,8 @@ def _load(path):
 def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), seed=2,
             max_term=5, min_size=3, max_size=9, backend="coqtop", retrieval_top=6,
             log=print, statements=None, signature="base", require_new=False,
-            prover="fixed", saturate=False, base=None, retry_open=False):
+            prover="fixed", saturate=False, base=None, retry_open=False,
+            corpus_forms="pose"):
     """statements: an explicit candidate list to use instead of the generator
     (tests; or a curated batch). Excluded statements are dropped from it too.
     signature / require_new: explore the wide signature, optionally only its
@@ -584,8 +599,9 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
     under both passes), "structural" (structural-tactics/v1) or
     "structural2" (structural-tactics/v2)."""
     base_pre = base
-    base = {"fixed": FixedTactics, "structural": StructuralTactics,
-            "structural2": StructuralTacticsV2}[prover]
+    base = prover if isinstance(prover, type) else {
+        "fixed": FixedTactics, "structural": StructuralTactics,
+        "structural2": StructuralTacticsV2}[prover]
     os.makedirs(out, exist_ok=True)
     corpus_path = os.path.join(out, "corpus.jsonl")
     summary_path = os.path.join(out, "rounds.jsonl")
@@ -665,7 +681,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                 log=lambda *_: None,
                 policy_factory=lambda: CorpusRetrievalPolicy(base(), corpus,
                                                              top=retrieval_top,
-                                                             saturate=saturate))
+                                                             saturate=saturate,
+                                                             corpus_forms=corpus_forms))
             second = rec.load(os.path.join(rdir, "retrieval", RECORD))
             rows = [x for x in rows if x["standing"] != "open"] + rec.corpus(second)
         eps = {e["data"]["episode"]: e["data"] for e in first if e["kind"] == "episode"}

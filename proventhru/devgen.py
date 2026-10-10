@@ -421,3 +421,55 @@ def preamble():
     text = re.sub(r"Require Import[^\n]*\n", "", text)
     return ("Require Import Arith Lia List Permutation. Import ListNotations. "
             + " ".join(text.split()))
+
+
+# ---------------------------------------------------------------- the pilot's tactics
+
+def isort_tactics():
+    """structural-tactics/isort/v1: structural-tactics/v2 plus what the pilot's
+    types need (results/isort-gate2.md, 2a's failures):
+      induction on a sorted hypothesis    insert_sorted, sorted_sort_id
+      a case on <=?, turned into <= / >   so lia can use it
+      Permutation's constructors          insert_perm
+    Kept apart from v2 so the nat / list nat runs stay comparable."""
+    from .explore import CASES_EQ, CLOSE, StructuralTacticsV2
+
+    LEB = ("repeat match goal with H : (_ <=? _) = true |- _ => apply Nat.leb_le in H "
+           "| H : (_ <=? _) = false |- _ => apply Nat.leb_gt in H end")
+    CLOSE_S = ("first [lia | reflexivity | assumption | (repeat constructor; first [lia | "
+               "assumption | eassumption]) | (constructor; [lia | assumption])]")
+    PERM = ("first [reflexivity | (apply perm_skip; assumption) | (eapply perm_trans; "
+            "[apply perm_swap | apply perm_skip; assumption])]")
+    SORTED = re.compile(r"^(\w+) : sorted ")
+
+    class ISortTactics(StructuralTacticsV2):
+        identity = {"id": "structural-tactics/isort/v1", "model": None, "provider": None}
+
+        def propose(self, obs, path, last_failure=None, tried=None):
+            out = super().propose(obs, path, last_failure, tried)
+            if not obs.goals:
+                return out
+            g = obs.goals[0]
+            extra = []
+            for h in g.hypotheses:
+                m = SORTED.match(h)
+                if m:
+                    H = m.group(1)
+                    extra += [
+                        (f"induction {H} as [|x|x y t Hxy Ht IH]; simpl in *; {CASES_EQ}; "
+                         f"{LEB}; simpl in *; {CASES_EQ}; {LEB}; {CLOSE_S}.", 0.9),
+                        (f"induction {H} as [|x|x y t Hxy Ht IH]; simpl in *.", 0.45)]
+            if "<=?" in g.conclusion or "if " in g.conclusion or "match" in g.conclusion:
+                extra += [(f"{CASES_EQ}; {LEB}; simpl in *; {CLOSE_S}.", 0.85),
+                          (f"{CASES_EQ}; {LEB}; simpl in *.", 0.5)]
+            if any("<=?" in h for h in g.hypotheses):
+                extra.append((f"{LEB}.", 0.6))
+            if g.conclusion.startswith("Permutation"):
+                extra += [(f"{PERM}.", 0.85),
+                          (f"{CASES_EQ}; simpl in *; {PERM}.", 0.8)]
+            extra.append((f"{CLOSE_S}.", 0.7))
+            have = {t for t, _ in out}
+            return out + [(t, sc) for t, sc in extra if t not in have]
+
+    _ = CLOSE
+    return ISortTactics
