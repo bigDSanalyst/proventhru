@@ -17,8 +17,9 @@ run's final corpus loaded. Its class is the first rung that closes it:
      induction (at the step case's tail) or with two corpus lemmas in one
      proof. A prover that uses the corpus structurally would find it; the
      fixed one does not.
-  3v outside the vocabulary: closed only by tactics the prover never offers
-     (revert / generalize before induction).
+  3v outside the vocabulary: closed only by tactics the prover never offers:
+     revert a number before induction (firstn, skipn), case on the tail in
+     the step case (removelast), or case on an if (filter).
   F  false: refuted by wider random inputs than the generator's (values to
      100, lists to 12). It passed the generator's tests (0..5) only.
   3  unexplained: no rung closes it. It may need a lemma the corpus lacks, a
@@ -119,6 +120,16 @@ def ladder(stmt, corpus):
                 two.append(f"intros; {REWRITES}; pose proof ({a1}); pose proof ({a2}); {CLOSE}.")
     vocab = []
     nats = [v for v, ty in binders(stmt) if ty == "nat"]
+    ifs = "repeat match goal with |- context [if ?b then _ else _] => destruct b end"
+    for v in lists:
+        # case on the tail in the step case (removelast), on an if (filter)
+        vocab += [f"intros; induction {v} as [|a t IH]; simpl in *; [{CLOSE} | destruct t; "
+                  f"simpl in *; try {REWRITES}; {CLOSE}].",
+                  f"intros; induction {v} as [|a t IH]; simpl in *; {ifs}; simpl in *; "
+                  f"try {REWRITES}; {CLOSE}."]
+        for n in nats:
+            vocab.append(f"intros; revert {n}; induction {v} as [|a t IH]; intros [|{n}]; "
+                         f"simpl in *; try specialize (IH {n}); try {REWRITES}; {CLOSE}.")
     for v in lists:
         for n in nats:
             vocab += [f"intros; revert {n}; induction {v}; intros [|{n}]; simpl in *; "

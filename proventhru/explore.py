@@ -137,6 +137,51 @@ class LibraryRetriever(Retriever):
         return [e for e in Retriever._search(session, ts) if not LEMMA_NAME.fullmatch(e[0])]
 
 
+IFS = "repeat match goal with |- context [if ?b then _ else _] => destruct b end"
+CLOSE = "first [lia | nia]"
+
+
+class StructuralTactics(FixedTactics):
+    """The fixed tactics, plus three proof shapes they cannot reach, found
+    by classifying run 6's open statements (tools/classify_opens.py):
+
+      case on the tail in the step case     list_max (removelast l) <= list_max l
+      case on an if                         list_max (filter Nat.even l) <= list_max l
+      revert a number before induction      list_sum (skipn n l) <= list_sum l
+
+    Each is offered closing (the whole proof, then lia / nia) and opening
+    (the cases left as goals), so the search, and the corpus index, can work
+    at the inner goals. For exploration only: the registered conditions use
+    fixed-tactics/v1, which this does not change."""
+    identity = {"id": "structural-tactics/v1", "model": None, "provider": None}
+
+    def propose(self, obs, path, last_failure=None, tried=None):
+        out = super().propose(obs, path, last_failure, tried)
+        if not obs.goals:
+            return out
+        g = obs.goals[0]
+        ctx = hypothesis_vars(g.hypotheses)
+        lists = [v for v in ctx.get(L, []) if not v.startswith("IH")]
+        nats = [v for v in ctx.get(N, [])]
+        extra = []
+        for v in lists:
+            extra += [
+                (f"induction {v} as [|a t IH]; simpl in *; [{CLOSE} | destruct t; simpl in *; "
+                 f"{CLOSE}].", 0.9),
+                (f"induction {v} as [|a t IH]; simpl in *; {IFS}; simpl in *; {CLOSE}.", 0.9),
+                (f"induction {v} as [|a t IH]; simpl in *; {IFS}; simpl in *.", 0.45)]
+            for n in nats:
+                extra += [
+                    (f"revert {n}; induction {v} as [|a t IH]; intros [|{n}]; simpl in *; "
+                     f"try specialize (IH {n}); {CLOSE}.", 0.9),
+                    (f"revert {n}; induction {v} as [|a t IH]; intros [|{n}]; simpl in *; "
+                     f"try specialize (IH {n}).", 0.45)]
+        if "if " in g.conclusion:
+            extra.append((f"{IFS}; simpl in *.", 0.55))
+        have = {t for t, _ in out}
+        return out + [(t, sc) for t, sc in extra if t not in have]
+
+
 def lemma_terms(stmt):
     """The constants and operators a statement's conclusion mentions."""
     body = stmt.split(", ", 1)[1] if stmt.startswith("forall") else stmt
@@ -395,13 +440,16 @@ def _load(path):
 
 def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), seed=2,
             max_term=5, min_size=3, max_size=9, backend="coqtop", retrieval_top=6,
-            log=print, statements=None, signature="base", require_new=False):
+            log=print, statements=None, signature="base", require_new=False,
+            prover="fixed"):
     """statements: an explicit candidate list to use instead of the generator
     (tests; or a curated batch). Excluded statements are dropped from it too.
     signature / require_new: explore the wide signature, optionally only its
     new operations' candidates. A run can change signature between rounds
     (rerun with more rounds and the new signature): rounds done under another
-    signature do not replay this stream."""
+    signature do not replay this stream. prover: "fixed" (fixed-tactics/v1
+    under both passes) or "structural" (structural-tactics/v1)."""
+    base = {"fixed": FixedTactics, "structural": StructuralTactics}[prover]
     os.makedirs(out, exist_ok=True)
     corpus_path = os.path.join(out, "corpus.jsonl")
     summary_path = os.path.join(out, "rounds.jsonl")
@@ -464,7 +512,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         first = []
         if batch:
             run(batch, os.path.join(rdir, "fixed"), pre, budget=None, step_budget=half,
-                backend=backend, jobs=jobs, log=lambda *_: None, policy_factory=FixedTactics)
+                backend=backend, jobs=jobs, log=lambda *_: None, policy_factory=base)
             first = rec.load(os.path.join(rdir, "fixed", RECORD))
         rows = [x for x in rec.corpus(first)]
         left = [x["statement"] for x in rows if x["standing"] == "open"]
@@ -472,7 +520,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             run(left, os.path.join(rdir, "retrieval"), pre, budget=None,
                 step_budget=step_budget - half, backend=backend, jobs=jobs,
                 log=lambda *_: None,
-                policy_factory=lambda: CorpusRetrievalPolicy(FixedTactics(), corpus,
+                policy_factory=lambda: CorpusRetrievalPolicy(base(), corpus,
                                                              top=retrieval_top))
             second = rec.load(os.path.join(rdir, "retrieval", RECORD))
             rows = [x for x in rows if x["standing"] != "open"] + rec.corpus(second)

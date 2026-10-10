@@ -552,6 +552,19 @@ class TestExplore(unittest.TestCase):
         evals = {statement(*c, canonical_names(c[0], c[1])) for c in candidates(classes, 3, 6)}
         self.assertNotIn(mono, evals)       # the eval sets' rule, unchanged
 
+    def test_structural_tactics_prove_the_monotonicity_lemmas(self):
+        from proventhru import record as rec
+        from proventhru.explore import BASE, StructuralTactics
+        from proventhru.pipeline import RECORD, run
+        stmts = ["forall (l1 : list nat), list_max (removelast l1) <= list_max l1",
+                 "forall (l1 : list nat) (n : nat), list_sum (skipn n l1) <= list_sum l1",
+                 "forall (l1 : list nat), list_max (filter Nat.even l1) <= list_max l1"]
+        with tempfile.TemporaryDirectory() as out:
+            run(stmts, out, BASE, budget=None, step_budget=300, backend="coqtop",
+                log=lambda *_: None, policy_factory=StructuralTactics)
+            rows = rec.corpus(rec.load(os.path.join(out, RECORD)))
+        self.assertEqual([r["standing"] for r in rows], ["proved"] * 3)
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy
