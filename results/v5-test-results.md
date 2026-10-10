@@ -107,7 +107,9 @@ detect large effects.
    Rule applied, set before the rerun's result was known: a condition with any hidden
    success is rerun in full. D600 was rerun with the fixed code as `D600fix`
    (commit `812ade7`; unaffected episodes made the same cached model requests). The old
-   D600 record is superseded. D600 proved 26 and D600fix proves 26. D2000 is secondary,
+   D600 record is superseded. D600 proved 26 and D600fix proves 26.
+   The impact check on D600fix finds 16 suspect steps in 6 episodes and
+   **0 hidden successes**: the rerun is clean. D2000 is secondary,
    and it was superseded and not rerun, to save compute.
 
    Proofs were never at risk: every proved outcome is certified by the kernel from the
