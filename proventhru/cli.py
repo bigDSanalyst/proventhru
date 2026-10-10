@@ -130,6 +130,8 @@ def main(argv=None):
     x.add_argument("--max-term", type=int, default=5)
     x.add_argument("--min-size", type=int, default=3)
     x.add_argument("--signature", choices=["base", "wide"], default="base")
+    x.add_argument("--saturate", action="store_true",
+                   help="also offer one step stating every discovered lemma the goal allows")
     x.add_argument("--prover", choices=["fixed", "structural", "structural2"],
                    default="fixed")
     x.add_argument("--new-only", action="store_true",
@@ -162,7 +164,7 @@ def main(argv=None):
                                  seed=a.seed, max_term=a.max_term, min_size=a.min_size,
                                  max_size=a.max_size, backend=a.backend or "coqtop",
                                  signature=a.signature, require_new=a.new_only,
-                                 prover=a.prover)
+                                 prover=a.prover, saturate=a.saturate)
         print(json.dumps({"corpus": len(corpus), "rounds": rounds[-1:] and rounds[-1]}))
         return 0
     if a.cmd == "protocol":

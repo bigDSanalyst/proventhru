@@ -610,6 +610,36 @@ class TestExplore(unittest.TestCase):
         if cx:      # reached within the first 400; its counterexample is all zeros
             self.assertEqual(set(cx[0]["counterexample"]["l1"]), {0})
 
+    def test_saturation_proves_a_chain_and_minimizing_keeps_only_used_lemmas(self):
+        from proventhru import record as rec
+        from proventhru.explore import (LEMMA_NAME, CorpusRetrievalPolicy, StructuralTacticsV2,
+                                        minimize, preamble)
+        from proventhru.pipeline import RECORD, run
+        corpus = [
+            {"name": "pt_r0_2", "statement": "forall (l1 : list nat), list_max (rev l1) = list_max l1",
+             "proof": ["intros.", "induction l1 as [|a t IH]; simpl in *; rewrite ?list_max_app, "
+                       "?list_sum_app, ?app_length in *; simpl in *; first [lia | nia]."]},
+            {"name": "pt_r0_16",
+             "statement": "forall (l1 : list nat), list_max (removelast l1) <= list_max l1",
+             "proof": ["intros.", "induction l1 as [|a t IH]; simpl in *; [first [lia | nia] | "
+                       "destruct t; simpl in *; first [lia | nia]]."]},
+            {"name": "pt_r0_5", "statement": "forall (l1 : list nat), length l1 <= list_sum (map S l1)",
+             "proof": ["intros.", "induction l1.", "reflexivity.", "simpl.", "lia."]}]
+        # removelast is monotone at rev l1, and rev keeps list_max: a chain of two
+        stmt = "forall (l1 : list nat), list_max (removelast (rev l1)) <= list_max l1"
+        pre = preamble(corpus)
+        found = {}
+        for sat in (False, True):
+            with tempfile.TemporaryDirectory() as out:
+                run([stmt], out, pre, budget=None, step_budget=200, backend="coqtop",
+                    log=lambda *_: None, policy_factory=lambda: CorpusRetrievalPolicy(
+                        StructuralTacticsV2(), corpus, saturate=sat))
+                found[sat] = rec.corpus(rec.load(os.path.join(out, RECORD)))[0]
+        self.assertEqual(found[False]["standing"], "open")
+        self.assertEqual(found[True]["standing"], "proved")
+        small = minimize(stmt, pre, found[True]["proof"])
+        self.assertEqual(sorted(set(LEMMA_NAME.findall(" ".join(small)))), ["pt_r0_16", "pt_r0_2"])
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy

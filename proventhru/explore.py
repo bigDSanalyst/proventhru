@@ -245,13 +245,16 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
     proof; lia because a discovered inequality is mostly a step inside
     arithmetic, which apply cannot use."""
 
-    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3, top_corpus=4):
+    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3, top_corpus=4,
+                 saturate=False, saturate_cap=30):
         super().__init__(base, top, score)
+        self.saturate, self.saturate_cap = saturate, saturate_cap
         self.retriever = LibraryRetriever()
         self.corpus = [(c["name"], c["statement"], lemma_terms(c["statement"])) for c in corpus]
         self.per_lemma, self.top_corpus = per_lemma, top_corpus
         self.identity = dict(self.identity,
-                             id=f"retrieval/v1+corpus-index/v2+{base.identity['id']}")
+                             id=f"retrieval/v1+corpus-index/v2{'+saturate/v1' if saturate else ''}"
+                                f"+{base.identity['id']}")
 
     def corpus_lemmas(self, conclusion, hypotheses=()):
         goal = set(terms(conclusion, hypotheses))
@@ -281,10 +284,89 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         # A node's candidates are tried in order, so the discovered lemmas go
         # before the library's: a corpus that grows would otherwise push its
         # own lemmas past the step budget behind library lemmas Search found.
+        sat = self.saturation(g) if self.saturate else None
+        if sat and sat not in have:
+            mine.append((sat, self.score))
         library = set(cost["added"])
         cost["added"] = [t for t, _ in mine] + cost["added"]
         return ([x for x in out if x[0] not in library] + mine
                 + [x for x in out if x[0] in library])
+
+    def saturation(self, g):
+        """One step that states every discovered lemma the goal's terms allow,
+        at the goal's subterms (its variables when the goal cannot be read),
+        and does not close: the next step's closers (lia) use them. A chain
+        of several lemmas (removelast and filter are monotone, max is at
+        most the sum) is out of reach of one-lemma pose proof; this offers
+        the chain in one step. It leaves the node to the cheap closers
+        first: it comes after them and after the one-lemma forms."""
+        if any(h.startswith("SAT") for h in g.hypotheses):
+            return None             # stated already on this path
+        goal_terms = set(terms(g.conclusion, g.hypotheses))
+        pool = hypothesis_vars(g.hypotheses)
+        pool = {L: list(pool.get(L, [])), N: list(pool.get(N, []))}
+        try:
+            lhs, rhs, _ = parse_statement(g.conclusion)
+            for t in list(_subterms(lhs)) + list(_subterms(rhs)):
+                if t.op not in VARS and t.vars():
+                    text = f"({t.coq()})"
+                    if text not in pool[t.type]:
+                        pool[t.type].append(text)
+        except (ValueError, AssertionError, IndexError, TypeError, KeyError):
+            pass
+        poses = []
+        for name, stmt, ts in self.corpus:
+            if not ts or not ts <= goal_terms | {'"<="', '"="'}:
+                continue
+            for args in itertools.product(*[pool[ty] for _, ty in binders(stmt)]):
+                poses.append(f"pose proof ({' '.join((name,) + args)}) as SAT{len(poses)}")
+                if len(poses) >= self.saturate_cap:
+                    break
+            if len(poses) >= self.saturate_cap:
+                break
+        return "; ".join(poses) + "." if len(poses) >= 2 else None
+
+
+def _closes_from(session, node, steps, timeout=5):
+    obs = None
+    try:
+        for tac in steps:
+            node, obs = session.run(node, tac, timeout)
+    except Exception:
+        return False
+    return bool(obs and obs.finished)
+
+
+def minimize(stmt, pre, proof, backend="coqtop"):
+    """A proof with each saturation step cut down to the lemmas it needs:
+    drop each stated lemma in turn and keep the drop if the proof still
+    closes. A saturation step states up to 30 lemmas; without this, a proof
+    would cite every one of them, and the count of multi-lemma proofs would
+    be inflated by lemmas it never used. One session: each trial branches
+    from the state before the step."""
+    proof = list(proof)
+    if not any("as SAT" in t for t in proof):
+        return proof
+    s = open_session(pre, stmt, backend)
+    try:
+        node = s.root
+        for i, tac in enumerate(proof):
+            if "as SAT" in tac:
+                poses = [p.strip() for p in tac.rstrip(".").split(";")]
+                k = 0
+                while k < len(poses):
+                    trial = poses[:k] + poses[k + 1:]
+                    step = [("; ".join(trial) + ".")] if trial else []
+                    if _closes_from(s, node, step + proof[i + 1:]):
+                        poses = trial
+                    else:
+                        k += 1
+                proof[i] = ("; ".join(poses) + ".") if poses else None
+            if proof[i] is not None:
+                node, _ = s.run(node, proof[i], 5)
+        return [t for t in proof if t is not None]
+    finally:
+        s.close()
 
 
 def corollary(stmt, pre, corpus, backend="coqtop", timeout=2):
@@ -490,7 +572,7 @@ def _load(path):
 def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), seed=2,
             max_term=5, min_size=3, max_size=9, backend="coqtop", retrieval_top=6,
             log=print, statements=None, signature="base", require_new=False,
-            prover="fixed"):
+            prover="fixed", saturate=False):
     """statements: an explicit candidate list to use instead of the generator
     (tests; or a curated batch). Excluded statements are dropped from it too.
     signature / require_new: explore the wide signature, optionally only its
@@ -573,7 +655,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                 step_budget=step_budget - half, backend=backend, jobs=jobs,
                 log=lambda *_: None,
                 policy_factory=lambda: CorpusRetrievalPolicy(base(), corpus,
-                                                             top=retrieval_top))
+                                                             top=retrieval_top,
+                                                             saturate=saturate))
             second = rec.load(os.path.join(rdir, "retrieval", RECORD))
             rows = [x for x in rows if x["standing"] != "open"] + rec.corpus(second)
         eps = {e["data"]["episode"]: e["data"] for e in first if e["kind"] == "episode"}
@@ -593,6 +676,9 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                          and x["statement"] not in known),
                         key=lambda x: (len(x["statement"]), x["statement"]))
         for row in proved:
+            if any("as SAT" in t for t in row["proof"]):
+                # cite only the lemmas the proof uses (minimize)
+                row = dict(row, proof=minimize(row["statement"], pre, row["proof"], backend))
             t = corollary(row["statement"], preamble(corpus + new), corpus + new, backend) \
                 if new else None
             if t:
