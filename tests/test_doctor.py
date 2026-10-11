@@ -107,14 +107,20 @@ class TestDrafts(Fixture):
 
 
 class TestClaims(Fixture):
+    # The names are read from AGENTS.md, never written here: this file is
+    # tracked, and the guard rightly blocks any tracked file that cites them.
     def test_citing_a_tool_agents_md_records_as_not_real_blocks(self):
         self.assertEqual(status(doctor.check_claims(self.repo), "claims"), "ok")
-        self.write("docs/notes.md", "We use rocq-piler to compile.\n")
+        name = doctor.fabricated_names(self.repo)[0]
+        self.write("docs/notes.md", f"We use {name} to compile.\n")
         self.commit("cite a tool that doesn't exist")
         self.assertEqual(status(doctor.check_claims(self.repo), "claims"), "BLOCK")
 
     def test_the_names_come_from_agents_md(self):
-        self.assertEqual(doctor.fabricated_names(self.repo), ["rocq-piler", "stratify", "close_admits"])
+        names = doctor.fabricated_names(self.repo)
+        self.assertEqual(len(names), 3)
+        text = (self.repo / "AGENTS.md").read_text()
+        self.assertTrue(all(f"`{n}`" in text for n in names))
 
 
 class TestProtocol(Fixture):
