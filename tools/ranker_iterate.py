@@ -31,6 +31,7 @@ HERE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 FORBIDDEN = ["examples/ranker_H.txt", "examples/ranker_rest.txt", "examples/eval_test.txt",
              "examples/eval_test_renamed.txt"]
 ALPHA = 0.05
+V5_PREAMBLE_SHA256 = "d5c6561af31a4638b9ffcd9ce9e56728a0922d1e4c0f5b551f54409094d274ea"
 
 
 def sha256_file(path):
@@ -111,10 +112,13 @@ class Run:
                     if s is None:
                         continue
                     ps = props.get(e, [])
+                    stats = d.get("stats") or {}
                     self.by_stmt[s] = dict(ep[e], episode=e,
                                            proved=d.get("kernel") == "accepted",
                                            proof=d.get("proof") or [],
-                                           steps=(d.get("stats") or {}).get("steps"),
+                                           steps=stats.get("steps"),
+                                           stopped=stats.get("stopped"),
+                                           crashed=bool(stats.get("error")),
                                            expansions=len(ps),
                                            lemma_tactics=sum(len((p.get("cost") or {}).get("added") or [])
                                                              for p in ps),
@@ -125,6 +129,12 @@ class Run:
 
     def gate_open(self, s):
         return self.by_stmt.get(s, {}).get("gate") == "open"
+
+    def usable(self, s):
+        """In every paired comparison: gated open, and searched without the
+        search itself crashing (a crash is neither a proof nor a failure)."""
+        o = self.by_stmt.get(s)
+        return bool(o) and o["gate"] == "open" and not o["crashed"]
 
     def lemma_nodes(self, s):
         """[(depth, lemma, position in B's list or None, offered record)] for
@@ -146,6 +156,35 @@ class Run:
                     pos = rec["position"] if rec else k     # plain B: its own order
                     out.append((i, name, pos, rec))
         return out
+
+
+def fingerprint(run_dir):
+    """What a determinism check compares, per statement: gate status,
+    standing, proof, steps, expansions, why the search stopped, and the
+    sequence of (path, tactic, session outcome) of every step."""
+    ep_stmt, out = {}, {}
+    trail = defaultdict(list)
+    with open(os.path.join(run_dir, "records.jsonl")) as fh:
+        for ln in fh:
+            r = json.loads(ln)
+            d = r["data"]
+            if r["kind"] == "episode":
+                ep_stmt[d["episode"]] = (d["statement"], (d.get("gate") or {}).get("status"))
+            elif r["kind"] == "step":
+                trail[d["episode"]].append((tuple(d["path"]), d["tactic"],
+                                            (d.get("session") or {}).get("outcome")))
+            elif r["kind"] == "outcome":
+                stmt, gate = ep_stmt[d["episode"]]
+                st = d.get("stats") or {}
+                out[stmt] = (gate, d.get("standing"), tuple(d.get("proof") or []), st.get("steps"),
+                             st.get("expansions"), st.get("stopped"), tuple(trail[d["episode"]]))
+    return out
+
+
+def fingerprint_diff(a_dir, b_dir):
+    """Statements whose fingerprints differ between two runs, and those only one has."""
+    a, b = fingerprint(a_dir), fingerprint(b_dir)
+    return sorted(s for s in set(a) | set(b) if a.get(s) != b.get(s))
 
 
 # --- statistics -------------------------------------------------------------
@@ -197,9 +236,9 @@ def sign_test(diffs):
 # --- report -----------------------------------------------------------------
 
 def compare(runs, stmts, x, y):
-    """y against x on the statements both gated open."""
+    """y against x on the statements usable in both (gated open, not crashed)."""
     rx, ry = runs[x], runs[y]
-    both = [s for s in stmts if rx.gate_open(s) and ry.gate_open(s)]
+    both = [s for s in stmts if rx.usable(s) and ry.usable(s)]
     gained = [s for s in both if ry.proved(s) and not rx.proved(s)]
     lost = [s for s in both if rx.proved(s) and not ry.proved(s)]
     g, l = len(gained), len(lost)
@@ -216,12 +255,11 @@ def class_a(run, s):
 
 
 def body_terms(statement):
-    st = " ".join(statement.split())
-    m = re.match(r"forall\s+(.*?),\s*(.*)$", st)
-    if not m:
-        return frozenset(terms(st))
-    hyps = [f"{v} : x" for g in re.findall(r"\(([^():]+):", m.group(1)) for v in g.split()]
-    return frozenset(terms(m.group(2), hyps))
+    """The terms of a statement's body, its bound variables left out (both
+    binder styles, through keys._binders)."""
+    from proventhru.keys import _binders
+    types, body = _binders(statement)
+    return frozenset(terms(body, [f"{v} : x" for v in (types or {})]))
 
 
 def fmt_cmp(c, tested=None):
@@ -247,14 +285,19 @@ def cmd_report(a):
         lt = sum(v["lemma_tactics"] for v in o)
         L.append(f"| {k} | `{pol}` | {sum(v['proved'] for v in o)} | {sum(v['gate'] == 'open' for v in o)} "
                  f"of {len(stmts)} | {ex / max(len(o), 1):.1f} | {lt / max(ex, 1):.2f} | `{r.dir}` |")
-    pre = {v["preamble_sha256"] for r in runs.values() for v in r.by_stmt.values()}
-    L += ["", f"Preamble hashes across all episodes: {sorted(pre)}."]
+    bad_pre = {k: sorted({v["preamble_sha256"] for v in r.by_stmt.values()} - {V5_PREAMBLE_SHA256})
+               for k, r in runs.items()}
+    bad_pre = {k: v for k, v in bad_pre.items() if v}
+    L += ["", "**Preamble:** every episode's preamble is v5's (sha256 " + V5_PREAMBLE_SHA256[:16] + "…)."
+          if not bad_pre else
+          "**INVALID RUNS: an episode's preamble isn't v5's:** " + json.dumps(bad_pre)]
 
     # determinism
     if "0a" in runs and "0b" in runs:
-        diff = [s for s in stmts if runs["0a"].by_stmt.get(s, {}).get("proof") !=
-                runs["0b"].by_stmt.get(s, {}).get("proof")]
-        L += ["", f"**Determinism (0b against 0a):** {len(diff)} statements differ in outcome or proof."]
+        diff = fingerprint_diff(runs["0a"].dir, runs["0b"].dir)
+        L += ["", f"**Determinism (0b against 0a):** {len(diff)} statements differ in gate status, "
+              "standing, proof, steps, expansions, stop reason or step trail."]
+        L += [f"- `{s}`" for s in diff]
 
     # primary sequence
     seq = [("0a", "3"), ("1", "3"), ("0a", "1")]
@@ -337,7 +380,8 @@ def cmd_report(a):
                           f"lower in {nr}: sign test p = {pp:.4g}.",
                           f"MRR by statement: R3 higher in {pm}, lower in {nm}: p = {pmrr:.4g}.",
                           f"Reference statements where R3's top 6 held every reference lemma and "
-                          f"iteration 3 didn't prove the statement: {len(missed)}."]
+                          f"iteration 3 didn't prove the statement: {len(missed)}."] + \
+                [f"- `{s}`" for s in sorted(missed)]
         else:
             rec_lines.append(f"Reference nodes: {nodes} (< 20): recall not measured.")
     L += ["", "## Interleaved run: recall@6 and MRR", ""] + (rec_lines or ["Not run."])
@@ -426,9 +470,20 @@ def cmd_report(a):
                      f"{st['positives']} positive; dropped {st['dropped']}.")
 
     # gate flips
-    flips = {k: [s for s in stmts if not r.gate_open(s)] for k, r in runs.items()}
-    L += ["", "## In-run gate", "", "Statements the in-run gate didn't classify open, dropped from every "
-          "comparison involving that run: " + (", ".join(f"{k}: {len(v)}" for k, v in flips.items() if v) or "none") + "."]
+    L += ["", "## Dropped from paired comparisons", "",
+          "A statement the in-run gate didn't classify open, or whose search crashed, is dropped "
+          "from every comparison involving that run."]
+    any_drop = False
+    for k, r in runs.items():
+        for s in stmts:
+            o = r.by_stmt.get(s)
+            why = ("missing" if not o else f"gate {o['gate']}" if o["gate"] != "open"
+                   else "search crashed" if o["crashed"] else None)
+            if why:
+                any_drop = True
+                L.append(f"- {k}: `{s}` ({why})")
+    if not any_drop:
+        L.append("None.")
 
     # per statement
     L += ["", "## Per statement", ""]

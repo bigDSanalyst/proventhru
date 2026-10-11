@@ -3,11 +3,18 @@
 Version: v1
 Written: 2026-10-10. A draft first (a19ea21). The code it governs came after the draft
 and was reconciled with it before freezing: 4397977, 95d301d and the freezing commit.
-Status: draft, under review. It takes effect at the commit that removes this line. That
-commit and this file's sha256 go in a `docs/frozen.md` row, which
-`tools/ranker_schedule.py` checks before it runs anything, and every target-1 run record
-gets a note annotation citing the hash. From then on, changes are dated amendments, and
-nothing is amended after a held-out result is seen, except under the bug rule below.
+Status: draft, under review. It takes effect at the commit that removes this line.
+- **What gets registered.** That commit goes in `docs/frozen.md` with rows for:
+  - this file's sha256;
+  - a hash over the code it governs (`code:target-1`, `tools/ranker_schedule.GOVERNED`);
+  - D0 and the four set files.
+- **What gets checked.** `tools/ranker_schedule.py` checks every row before it runs
+  anything (and `tools/doctor.py` checks the same rows).
+- **What every run record carries.** A note annotation citing the doc's hash, the code
+  hash and the commit it ran under.
+
+From then on, changes are dated amendments, and nothing is amended after a held-out result
+is seen, except under the bug rule below.
 
 Seeking-layer work: a learned component of the policy, trained on the system's own
 output. Nothing in the truth layer changes. One substrate fix comes first (retrieval/v2,
@@ -20,7 +27,7 @@ below).
 - **The gate was run on H and on `test`,** with each of the two Search parsers. All 420
   statements were `open` both ways.
 - **D0 was extracted:** 157 episodes, 1,467 rows, 72 positives.
-- **B′ was run on dev.**
+- **B′ was run on dev:** 15 of 29, record head `46afa9a0…` (`runs/ranker/devB600v2`).
 - **During the review,** a reviewer ran B in scratch on 100 statements of the superseded
   H (4 proved) and 100 of the superseded T1 (9 proved), with no records kept. 33 of those
   statements are in this H.
@@ -33,6 +40,13 @@ below).
     was generated. On those statements, R1 filled 84.5% of its slots from outside B′'s top
     6.
   - Nothing from H, T1 or T2 was run.
+- **A consistency check of this text against the code,** before freezing:
+  - It refitted R1 from D0, which gave a byte-identical file (sha256 `b00453a6…`).
+  - It found places where this text described the code loosely. The text was corrected
+    to say what the code does; the code's features were not changed.
+  - It found three bugs in the scheduler (an import path, a determinism check that
+    compared proofs only, and no way to carry out the bug rule). They were fixed before
+    freezing.
 
 ## Why this target, and what it decides
 
@@ -92,7 +106,7 @@ result carries over to M1 inside D is an assumption it doesn't test.
     the corpus index is left for a later target.
   - Library lemmas are rarely *retrieved* on run 8–9 proofs partly because
     structural-tactics/v2 hardcodes them: `rewrite ?list_max_app, ?list_sum_app,
-    ?app_length` (explore.py:194) is in 40 of 191 run-8 and 38 of 255 run-9 proofs, and 38
+    ?app_length` (explore.py:193) is in 40 of 191 run-8 and 38 of 255 run-9 proofs, and 38
     and 36 of those fail to compile without it.
   - That's the hand-picked kind of choice the retrospective lists as drift 2.
 
@@ -118,8 +132,10 @@ result carries over to M1 inside D is an assumption it doesn't test.
   Excluded are:
   - every statement of `eval_test.txt`, `eval_test_renamed.txt` and `eval_open.txt` (149
     up to bound names);
-  - every statement searched in the records under `devA200`, `devA30`, `devA30-check`,
-    `devA600`, `devB600`, `devforms`, `explore-smoke` and `explore1`–`explore9` (904).
+  - every statement with an episode in the records under `devA200`, `devA30`,
+    `devA30-check`, `devA600`, `devB600`, `devforms`, `explore-smoke` and
+    `explore1`–`explore9` (904, of which 698 were searched and the rest settled by the
+    gate).
 
   The record list is written in each set file's header.
 - **Gate:** `tools/ranker_sets.py CANDIDATES --records <those> --log GATE_LOG` gates every
@@ -142,11 +158,13 @@ result carries over to M1 inside D is an assumption it doesn't test.
   - The owner accepted this population. Every reading is about it.
 - **Preamble:** every set file's `# preamble:` line is v5's (`Require Import Arith Lia
   List. Import ListNotations.`), and the hash covers it. `docs/frozen.md` records each
-  file's sha256 and the output of `proventhru protocol set FILE`. A run whose episodes'
-  `preamble_sha256` isn't `d5c6561a…` is invalid.
-- **In-run gate:** `pipeline.run` gates every statement again. A statement the in-run gate
-  doesn't classify open in some run is listed and dropped from every paired comparison
-  involving that run.
+  file's sha256 and the output of `proventhru protocol set FILE`. A run with an episode
+  whose `preamble_sha256` isn't `d5c6561a…` is invalid: the schedule stops on it.
+- **In-run gate and crashes:** `pipeline.run` gates every statement again.
+  - A statement the in-run gate doesn't classify open in some run is listed and dropped
+    from every paired comparison involving that run.
+  - So is a statement whose search crashed (`stats.error` in its outcome), after the
+    schedule has relaunched the run, which resumes crashed searches, at most twice.
 
 ## The policy under test
 
@@ -159,16 +177,22 @@ result carries over to M1 inside D is an assumption it doesn't test.
     reproduce.
   - On dev, B′ proves the same 15 of 29 as v1, with the same proofs. The gate's verdicts on
     H and `test` are the same under both parsers.
-  - Every run here uses v2, except A (no retrieval) and the one reference run of B v1 on H.
-    Target 2 states which version its D uses.
+  - Every run here uses v2 for the policy's retrieval, except A (no retrieval) and the
+    one reference run of B v1 on H.
+  - The in-run gate (`gate.classify`'s library closers) keeps v1's parser in every run.
+    Its verdicts on H and `test` are the same under both parsers.
+  - The v1 run is a single, unreplicated reference. At J = 3, v1's glued entries can
+    depend on which statement fills a worker's Search cache first.
+  - Target 2 states which version its D uses.
 - **B′:** `RetrievalPolicy(FixedTactics(), top=6, version=2)`.
   - 600 steps, expansions unbounded, coqtop, Coq 8.18.0, v5's preamble.
   - v5's per-step limits: Coq `Timeout 5` per tactic and a 30 s hard deadline, the
     `CoqEnv` defaults at the freezing commit, which v5's runs used.
   - Run as `proventhru --backend coqtop run FILE --policy fixed --retrieval 6
     --retrieval-version 2 [--ranker Rk] [--slots …] --budget 0 --step-budget 600 --jobs J
-    --out DIR`. `tools/ranker_iterate.py run` builds this command, and every run uses
-    J = 3.
+    --out DIR`. `tools/ranker_iterate.py run` builds this command. J is 3 in every run,
+    fixed in the schedule (`ranker_schedule.JOBS`): with `Timeout 5` and a 30 s deadline,
+    outcomes can depend on load.
 - **With a ranker** (`ranker.RankedRetrievalPolicy`):
   - At each node, the ranker scores every lemma in the list `Retriever.lemmas` returns for
     the first goal (the full list, including the per-term fallback).
@@ -207,23 +231,37 @@ result carries over to M1 inside D is an assumption it doesn't test.
   4. whether all of them do;
   5. whether L's conclusion is an equation;
   6. whether L's conclusion relation is G's, among `<->`, `=`, `<=`, `<`, `>=`, `>`, `<>`
-     and other;
+     and other (for G, see below);
   7. L's number of premises, capped at 3;
-  8. the log of L's statement length;
+  8. the natural log of the number of characters in L's statement as parsed (whitespace
+     collapsed);
   9. whether a head symbol of either side of L's conclusion is a head symbol of either
-     side of G's;
-  10. log(1 + min(p, 6)), where p is L's position in the library-only list Search returns
-      under v5's preamble (D0 labels only positions 0–5);
+     side of G (for G, see below);
+  10. log(1 + min(p, 6)), where p is L's index in B′'s ranked list (`Retriever.lemmas`:
+      v2 parser, `pt_` names removed, `retrieval.rank`'s order). D0 labels only positions
+      0–5.
   11. whether L's name starts with `Nat.`;
   12. L's usage prior, (positives + 5g) / (labelled rows + 5):
-      - g is the positive rate over the rows used: the other four folds for a training row
-        (5 folds by statement up to bound names), all training rows at selection time;
+      - g is the positive rate over the rows used: the other four folds for a training row,
+        all training rows at selection time;
+      - a statement's fold is int(sha256(keys.key(statement)), 16) mod 5, so the folds
+        are by statement up to bound names;
       - an unseen name gets g.
 
   Features 5–7 and 9 use `ranker.py`'s `conclusion()`, `premises()`, `relation()` and
-  `heads()` at the freezing commit. Binders are stripped at the top-level comma, and
-  premises are the " -> " at bracket depth 0. Features constant over a node are left out,
-  since they can't change the order within a node in a linear model.
+  `heads()` at the freezing commit.
+  - **For L:** `conclusion()` strips the leading binders at the top-level comma, then every
+    " -> " premise at bracket depth 0. A binder that follows a premise is kept
+    (`fold_symmetric`'s conclusion still starts with `forall`).
+  - **For G:** `relation()` and `heads()` read the first goal's conclusion as Coq prints it,
+    whitespace collapsed, without stripping binders or premises. At a root node (about
+    half of D0's rows) G's left-side head is then `forall`, unless an infix operator is at
+    depth 0.
+  - These definitions are the code's. They were written down after R1's weights were seen,
+    and nothing in the code was changed.
+
+  Features constant over a node are left out, since they can't change the order within a
+  node in a linear model.
 - **Model:**
   - L2-regularized logistic regression in numpy, with penalty ½‖w‖² (the intercept
     unpenalized) on features standardized on the training rows;
@@ -233,9 +271,10 @@ result carries over to M1 inside D is an assumption it doesn't test.
 - **Extraction** (`tools/ranker_data.py`):
   - Each episode is read once by id. Rounds 0–5 of exploration run 5 are byte copies of
     run 4's.
-  - Each proof's prefix is replayed under the episode's own preamble. The replayed goal at
-    each labelled node is checked against the `session.observation` of the step that
-    reached it, and a mismatch is dropped and counted.
+  - Each proof's prefix is replayed under the episode's own preamble. At every labelled
+    node below the root, the replayed first goal's conclusion (whitespace collapsed) is
+    checked against the `session.observation` of the step that reached it. A mismatch is
+    dropped and counted. The root goal is the statement's.
   - Search is rerun from the session root, never at the node (where it would also list
     local hypotheses). It uses v2's parser with `pt_` names removed, which gives B′'s
     library list under v5's base preamble. Position is the lemma's index in that list.
@@ -254,17 +293,19 @@ result carries over to M1 inside D is an assumption it doesn't test.
 
 `tools/ranker_schedule.py` runs these in this order:
 
-| run | policy on H | ranker trained on | then |
-|---|---|---|---|
-| ref | A (fixed tactics) | — | reference only |
-| v1 | B as registered (retrieval/v1) | — | reference only: the parser bug's effect on H |
-| 0a, 0b | B′, twice | — | 0b is a determinism check |
-| P0 | B′, placebo slots | — | sets θ |
-| 1 | B′ + R1 | D0 | B′ + R1 on T1 → D1 |
-| 2 | B′ + R2 | D0 + D1 | B′ + R2 on T2 → D2 |
-| 3 | B′ + R3 | D0 + D1 + D2 | the interleaved run on H |
-| 2p | B′ + R2′ | D0 + D1′ | — |
-| 3p | B′ + R3′ | D0 + D1′ + D2′ | — |
+| run | policy | on | ranker trained on | note |
+|---|---|---|---|---|
+| 0a, 0b | B′, twice | H | — | 0b is a determinism check |
+| ref | A (fixed tactics) | H | — | reference only |
+| v1 | B as registered (retrieval/v1) | H | — | reference only: the parser bug's effect on H |
+| P0 | B′, placebo slots | H | — | sets θ |
+| T1-B, T2-B | B′ | T1, T2 | — | the controls' data, D1′ and D2′ |
+| 1 | B′ + R1 | H | D0 | then B′ + R1 on T1 → D1 |
+| 2 | B′ + R2 | H | D0 + D1 | then B′ + R2 on T2 → D2 |
+| 2p | B′ + R2′ | H | D0 + D1′ | — |
+| 3 | B′ + R3 | H | D0 + D1 + D2 | — |
+| 3p | B′ + R3′ | H | D0 + D1′ + D2′ | — |
+| X | interleaved, B′ and R3 | H | — | evaluation only |
 
 - **D0:**
   - the retrieval passes of explore3–9 (`round-*/retrieval/records.jsonl`, each episode
@@ -272,8 +313,16 @@ result carries over to M1 inside D is an assumption it doesn't test.
   - `runs/devB600/records.jsonl` (11,357 entries, head `e07b1916…`).
 
   Not `devforms/B`, a content-identical rerun, and nothing in `runs/v1`.
-- **0b:** B′ is deterministic. If 0b differs from 0a in any item, the schedule stops and
-  the cause is found before iteration 1.
+  - Exploration runs 1 and 2 are left out. D0 was defined as runs 3–9 in the first
+    draft (a19ea21), before any fit; run 3 is the first written up in `results/`.
+  - Run 2's retrieval passes used B's policy and hold one kernel-accepted proof (18
+    labels, 1 positive). That is said here rather than changed after R1's weights were
+    seen.
+- **0b:** B′ is deterministic. The schedule compares 0a and 0b by fingerprint
+  (`ranker_iterate.fingerprint`). For each statement, that is its gate status, standing,
+  proof, steps, expansions and stop reason, plus every step's (path, tactic, session
+  outcome). If any statement differs, the schedule stops and the cause is found before
+  iteration 1.
 - **P0** (`ranker.PlaceboRetrievalPolicy`): B′'s forms and scores, with the 6 slots filled
   by the lemmas of smallest sha256("0|" + goal + "|" + name). Here goal is the first goal's
   conclusion, with whitespace collapsed.
@@ -285,8 +334,10 @@ result carries over to M1 inside D is an assumption it doesn't test.
 - **The interleaved run** (`ranker.InterleavedRetrievalPolicy`), after R3 is fitted:
   - One run on H at 600 steps offers, at each node, the union of B′'s top 6 and R3's top
     6, with B's forms.
-  - A lemma's slot is the smaller of its two ranks, with ties going by sha256(goal + "|" +
-    name). Scores are 0.7 − 0.01 × slot.
+  - The lemmas are offered in order of the smaller of their two ranks, ties going by
+    sha256(goal + "|" + name).
+  - The k-th lemma offered (k from 0) gets B's score for slot k, 0.7 − 0.01 × k, so up to
+    12 lemmas score 0.70 down to 0.59.
   - Its records are for evaluation only and never enter a D.
 - **Every row is always run.** There's no early stop.
 - **Plateau, named after the fact:** θ = max(4, 1 + the number of H statements P0 proves
@@ -323,7 +374,7 @@ result carries over to M1 inside D is an assumption it doesn't test.
     there. MRR uses L's rank in that order.
   - B′ and R3 are compared by statement: the mean over the statement's reference nodes,
     with an exact two-sided sign test.
-  - Also reported: the reference statements where R3's top 6 holds every reference lemma
+  - Also listed: the reference statements where R3's top 6 holds every reference lemma
     and iteration 3 didn't prove the statement.
   - Below 20 reference nodes, recall is "not measured".
   - The run offers up to 12 lemmas, so it measures what is offered, not what is proved.
@@ -334,12 +385,12 @@ result carries over to M1 inside D is an assumption it doesn't test.
     ranker;
   - A against B′ on H (H is a different, harder population from `test`, so this isn't
     compared with `test`'s 22 vs 22), and v1 against B′ on H;
-  - every table also by relation (= and <=), descriptive;
+  - proved counts per run by relation (= and <=), descriptive;
   - **contamination,** fixed once against the statements of D0, T1 and T2: each H statement
-    is classed by whether its root term set equals a training statement's, and proof
-    deltas are reported by class;
+    is classed by whether its root term set equals a training statement's, and 3 vs 0a's
+    gains and losses are reported by class;
   - extraction drops, repeats and head mismatches, per D;
-  - in-run gate drops.
+  - the statements dropped for the in-run gate or a crashed search, listed.
 
 ## How the result is read, stated now
 
@@ -360,12 +411,15 @@ gains and losses against 0a, and test (1) is the first test of the sequence abov
   as a failure of this learner or this test, not as evidence about ranking.
 
 Self-improvement is read separately:
-- **Self-improving loop:** tests (1) and (2) rejected with G > L, and R2 ahead of R2′ and
-  R3 ahead of R3′ in net (G − L > 0, each reported with its p and interval).
-- **More of the system's own data helps:** (1) and (2) rejected, but R2 or R3 isn't ahead
-  of its control. Reported as "a gain consistent with more of the system's own training
-  statements; no evidence that the improved policy's output taught more than B′'s".
-- **One-shot gain:** (1) rejected, (2) not. A gain from existing data, not a loop.
+- **Self-improving loop:** tests (1) and (2) each rejected with G > L, and R2 ahead of R2′
+  and R3 ahead of R3′ in net (G − L > 0, each reported with its p and interval).
+- **More of the system's own data helps:** (1) and (2) each rejected with G > L, but R2 or
+  R3 isn't ahead of its control. Reported as "a gain consistent with more of the system's
+  own training statements; no evidence that the improved policy's output taught more than
+  B′'s".
+- **One-shot gain:** (1) rejected with G > L, and (2) not rejected with G > L. A gain from
+  existing data, not a loop.
+- **No gain to read as self-improvement:** (1) not rejected with G > L.
 - R1 against R2′ is reported as the effect of D1′'s statements alone.
 
 Scope: every reading is about the fixed tactics and H's population, which is almost all
@@ -374,17 +428,24 @@ inside D.
 
 ## Bug rule, fixed now
 
-A bug found after iteration 0 starts is fixed in a dated commit. Every run the fix could
-change is rerun in full under the fix, from the earliest affected iteration, and both
-results are reported. Nothing else changes.
+A bug found after iteration 0 starts is fixed in a dated commit.
+- The fix is registered as a new `code:target-1` row in `docs/frozen.md`.
+- Every run the fix could change is rerun in full under it, from the earliest affected
+  step, with `tools/ranker_schedule.py --tag fix-N`. The tag namespaces the run
+  directories, the D and R files and the report, so nothing already written is
+  overwritten.
+- The schedule refuses to resume a record started under another doc or code hash.
+- Both results are reported. Nothing else changes.
 
 ## What D0 holds
 
 Extracted at the freezing commit's code on 2026-10-10 (the figures in
 `results/ranker/D0.stats.json` are the ones that count):
-- 157 episodes, 1,467 rows, 72 positives, over 56 statements and 14 lemmas: list_sum_app
-  23, app_length 8, rev_length 7, count_occ_bound 6, list_max_app 6, map_length 5, map_app
-  4, and 13 others.
+- **Episodes:** 157 replayed, 136 of which contribute rows once repeats are removed.
+- **Rows:** 1,467, over 130 statements and 120 lemmas.
+- **Positives:** 72, over 56 statements and 14 lemmas: list_sum_app 23, app_length 8,
+  rev_length 7, count_occ_bound 6, list_max_app 6, map_length 5, map_app 4, and 13 more
+  over 7 other lemmas.
 - 278 repeats dropped; nothing else dropped.
 - devB600 contributes 213 rows, 11 of them positive. Run 9 contributes 630 rows, none
   positive once repeats are removed.
@@ -401,8 +462,9 @@ by the loop, which is why the primary test is R3 against 0a, not R1.
 - **Variable slot counts.** A ranker that offers fewer than 6 lemmas when none looks useful
   would save steps for the fixed tactics, which is the trade v5 measured. That's a
   different question from ranking.
-- **Off-path negatives:** about 53k all-failed rows at off-path nodes. A separately
-  registered variant, if wanted.
+- **Off-path negatives:** all-failed rows at nodes off the found path. There are tens of
+  thousands in D0's sources, most in episodes without a proof. A separately registered
+  variant, if wanted.
 - **Ranking the corpus index or saturation:** see the drift note above.
 - **Any change to the `test` set,** or to conditions A–D on it.
 

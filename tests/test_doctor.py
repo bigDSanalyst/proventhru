@@ -99,6 +99,24 @@ class TestFrozen(Fixture):
         self.assertEqual(status(checks, "frozen.commits"), "LOOK")
 
 
+class TestCodeRows(Fixture):
+    def test_changed_governed_code_blocks(self):
+        def code(repo):
+            return hashlib.sha256((Path(repo) / "docs/x.md").read_bytes()).hexdigest()
+        c = self.commit("code")
+        self.write("docs/frozen.md", f"| `code:test` | v1 | `{code(self.repo)}` | `{c}` | 2026-10-11 |\n")
+        self.commit("register code")
+        with mock.patch.dict(doctor.CODE_ROWS, {"code:test": code}):
+            self.assertEqual(status(doctor.check_frozen(self.repo), "frozen"), "ok")
+            self.write("docs/x.md", "# x\n\nchanged code\n")
+            self.assertEqual(status(doctor.check_frozen(self.repo), "frozen"), "BLOCK")
+
+    def test_a_code_row_without_a_rule_blocks(self):
+        c = self.commit("code")
+        self.write("docs/frozen.md", f"| `code:unknown` | v1 | `{'0' * 64}` | `{c}` | 2026-10-11 |\n")
+        self.assertEqual(status(doctor.check_frozen(self.repo), "frozen"), "BLOCK")
+
+
 class TestDrafts(Fixture):
     def test_a_draft_is_a_decision_owed(self):
         self.assertEqual(status(doctor.check_drafts(self.repo), "drafts"), "ok")

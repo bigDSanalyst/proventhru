@@ -162,6 +162,15 @@ def frozen_rows(text):
                       text, re.M)
 
 
+def _target1_code(repo):
+    from ranker_schedule import code_hash
+    return code_hash(str(repo))
+
+
+# Code rows in docs/frozen.md, and the module that owns each one's file list.
+CODE_ROWS = {"code:target-1": _target1_code}
+
+
 def check_frozen(repo):
     path = repo / "docs" / "frozen.md"
     if not path.exists():
@@ -172,13 +181,24 @@ def check_frozen(repo):
     bad, good, unseen = [], [], []
     shallow = git(repo, "rev-parse", "--is-shallow-repository") == "true"
     for doc, (version, digest, commit) in sorted(latest.items()):
-        f = repo / doc
-        if not f.exists():
-            bad.append(f"{doc} {version}: the file is gone")
-            continue
-        if sha256_file(f) != digest:
-            bad.append(f"{doc} {version}: sha256 {sha256_file(f)[:16]}, registered {digest[:16]}")
-            continue
+        if doc.startswith("code:"):
+            # frozen code: a hash over the files its owner governs
+            owner = CODE_ROWS.get(doc)
+            if owner is None:
+                bad.append(f"{doc} {version}: no rule for this code row")
+                continue
+            got = owner(repo)
+            if got != digest:
+                bad.append(f"{doc} {version}: the governed code hashes to {got[:16]}, registered {digest[:16]}")
+                continue
+        else:
+            f = repo / doc
+            if not f.exists():
+                bad.append(f"{doc} {version}: the file is gone")
+                continue
+            if sha256_file(f) != digest:
+                bad.append(f"{doc} {version}: sha256 {sha256_file(f)[:16]}, registered {digest[:16]}")
+                continue
         if git(repo, "cat-file", "-e", commit + "^{commit}") is None:
             if shallow:
                 unseen.append(f"{doc} {version} ({commit})")
