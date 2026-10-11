@@ -22,3 +22,5 @@ A `code:` row is a hash over the files its owner lists, not a file: `code:target
 (bug rule, `docs/rsi-target1-ranker.md`). The set files' statement hashes, as
 `proventhru protocol set FILE` prints them: H `52b5025c…db47`, T1 `2cc78944…edac`, T2
 `db2a7748…faa5`, rest `dfbe55b7…9627`. `tools/doctor.py` checks every row.
+| `docs/pattern-run-1.md` | v1 | `e8b31596d574963140773827f377ba0c238ce05db6f5d0500724c41b333256da` | `9192904` | 2026-10-11 |
+| `code:pattern-run-1` | v1 | `c31a3eee4e7967cbe2210d4b1e274a9969af0b1304d9f6984bd681ff3062e3ed` | `9192904` | 2026-10-11 |
