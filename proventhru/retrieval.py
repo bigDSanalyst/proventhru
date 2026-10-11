@@ -62,11 +62,26 @@ def terms(conclusion, hypotheses=()):
     return found
 
 
-def parse(output):
+# A goal display: what coqtop prints after the next command once BackTo has
+# moved the session (see parse).
+GOAL_DISPLAY = re.compile(r"^(\d+ (focused )?goals?\b|No more (sub)?goals|"
+                          r"This subproof is complete|There are unfocused goals)")
+
+
+def parse(output, clean=False):
     """Search output -> [(name, statement)]. An entry starts at column 0 with
-    'name:'; Petanque wraps long statements onto indented lines."""
+    'name:'; Petanque wraps long statements onto indented lines.
+
+    clean (retrieval/v2): stop at a goal display. After BackTo, coqtop prints
+    the goal after the next command's output, so the first Search after the
+    session has left the root ends with '1 goal (ID 3)', a rule and the root
+    goal, and v1 glues them onto the last entry: that entry then mentions
+    every goal term and ranks first. v1 is kept as it was, so the registered
+    conditions (PROTOCOL.md v5) reproduce."""
     entries, cur = [], None
     for line in output.splitlines():
+        if clean and GOAL_DISPLAY.match(line):
+            break
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_'.]*):\s*(.*)$", line)
         if m:
             cur = [m.group(1), m.group(2)]
@@ -92,11 +107,13 @@ def rank(found, goal_terms):
 
 
 class Retriever:
-    """Searches through a session's query, caching per term set."""
+    """Searches through a session's query, caching per term set. clean:
+    retrieval/v2's parser (see parse)."""
 
-    def __init__(self):
+    def __init__(self, clean=False):
         self.cache = {}
         self.ms = 0.0
+        self.clean = clean
 
     def lemmas(self, session, goal_terms):
         key = tuple(goal_terms)
@@ -117,23 +134,25 @@ class Retriever:
         self.cache[key] = rank(found, goal_terms)
         return self.cache[key]
 
-    @staticmethod
-    def _search(session, ts):
+    def _search(self, session, ts):
         try:
-            return parse(session.query(session.root, "Search " + " ".join(ts) + "."))
+            return parse(session.query(session.root, "Search " + " ".join(ts) + "."),
+                         clean=self.clean)
         except Exception:
             return []
 
 
 class RetrievalPolicy(Policy):
     """A base policy's candidates, then up to `top` library lemmas for the
-    first goal, each as rewrite / rewrite <- (equations) and apply."""
+    first goal, each as rewrite / rewrite <- (equations) and apply.
+    version 1 is the registered B; version 2 parses Search output cleanly
+    (see parse) and is otherwise the same."""
 
-    def __init__(self, base, top=6, score=0.7):
-        self.base, self.top, self.score = base, top, score
-        self.retriever = Retriever()
+    def __init__(self, base, top=6, score=0.7, version=1):
+        self.base, self.top, self.score, self.version = base, top, score, version
+        self.retriever = Retriever(clean=version == 2)
         self.env = None
-        self.identity = dict(base.identity, id=f"retrieval/v1+{base.identity['id']}",
+        self.identity = dict(base.identity, id=f"retrieval/v{version}+{base.identity['id']}",
                              retrieval={"top": top, "method": "coq Search on goal terms"})
         self.last_cost = None
 
@@ -147,6 +166,11 @@ class RetrievalPolicy(Policy):
     def reexpand(self):
         return getattr(self.base, "reexpand", 0)
 
+    def select(self, goal, found):
+        """Which of Search's ranked list fill the slots: the first `top`. A
+        learned ranker (ranker.RankedRetrievalPolicy) chooses differently."""
+        return found[: self.top]
+
     def propose(self, obs, path, last_failure=None, tried=None):
         out = list(self.base.propose(obs, path, last_failure, tried=tried) if tried is not None
                    else self.base.propose(obs, path, last_failure))
@@ -154,8 +178,8 @@ class RetrievalPolicy(Policy):
         lemmas = []
         if obs.goals and self.env is not None and self.env.session is not None:
             g = obs.goals[0]
-            lemmas = self.retriever.lemmas(self.env.session,
-                                           terms(g.conclusion, g.hypotheses))[: self.top]
+            lemmas = self.select(g, self.retriever.lemmas(self.env.session,
+                                                          terms(g.conclusion, g.hypotheses)))
         have = {t for t, _ in out}
         added = []
         for i, (name, stmt) in enumerate(lemmas):
