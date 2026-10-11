@@ -42,9 +42,21 @@ def _policy(a, preamble):
         from .policy_claude import ClaudePolicy
         pol = ClaudePolicy(preamble, model=a.model, effort=a.effort, k=a.k,
                            max_calls=a.max_calls)
-    if a.retrieval:
+    slots = a.slots or ("ranked" if a.ranker else None)
+    if (a.ranker or slots) and not a.retrieval:
+        raise SystemExit("--ranker and --slots need --retrieval N")
+    if slots in ("ranked", "interleave") and not a.ranker:
+        raise SystemExit(f"--slots {slots} needs --ranker")
+    if slots:
+        from . import ranker as rk
+        if slots == "placebo":
+            pol = rk.PlaceboRetrievalPolicy(pol, top=a.retrieval)
+        else:
+            cls = rk.RankedRetrievalPolicy if slots == "ranked" else rk.InterleavedRetrievalPolicy
+            pol = cls(pol, rk.Ranker.load(a.ranker), top=a.retrieval)
+    elif a.retrieval:
         from .retrieval import RetrievalPolicy
-        pol = RetrievalPolicy(pol, top=a.retrieval)
+        pol = RetrievalPolicy(pol, top=a.retrieval, version=a.retrieval_version)
     return pol
 
 
@@ -95,6 +107,12 @@ def _policy_args(p):
                    help="stop calling the model after this many calls (cost cap)")
     p.add_argument("--retrieval", type=int, default=0, metavar="N",
                    help="also offer the N best-matching library lemmas at each node")
+    p.add_argument("--retrieval-version", type=int, choices=[1, 2], default=1,
+                   help="1: as registered (PROTOCOL.md v5); 2: Search output parsed cleanly")
+    p.add_argument("--ranker", default=None, metavar="FILE",
+                   help="with --retrieval: a fitted lemma ranker (ranker.py) chooses the N")
+    p.add_argument("--slots", choices=["ranked", "placebo", "interleave"], default=None,
+                   help="with --retrieval: who fills the slots (ranked and interleave need --ranker)")
 
 
 def main(argv=None):
