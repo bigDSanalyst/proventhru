@@ -7,9 +7,11 @@ Theory exploration over the stdlib nat and list nat signature, in rounds:
   1. generate  the next per_round candidates from conjecture.py, smallest
                first: small laws are proved first and are the lemmas the
                bigger ones need.
-  2. test      each candidate on 2,000 fresh random inputs and 1,000 wide
-               ones (values to 100, lists to 12: small values let false
-               bounds through),
+  2. test      each candidate on 2,000 fresh random inputs, 1,000 wide ones
+               (values to 100, lists to 12: small values let false bounds
+               through), and every list of length at most 5 over {0, 1, 2}
+               (random inputs rarely hold four zeros); each small-list drop
+               is recorded with its counterexample in round-N/refuted.jsonl,
                and drop instances of laws over nat alone: with every
                list-derived number replaced by a free one, 0 * list_sum l = 0
                is still true, so it says nothing about lists.
@@ -59,7 +61,7 @@ from collections import Counter
 from . import record as rec
 from .conjecture import (ALL_OPS, EDGE, L, N, OPS, VARS, WIDE, ops_used, anti_unify, canonical_names, candidates,
                          constant_list, enumerate_classes, _subterms, generalize, holds, nat_abstraction,
-                         nat_instance, parse_statement, random_env, statement, wide_env)
+                         nat_instance, parse_statement, random_env, small_envs, statement, wide_env, counterexample)
 from .env import DEFAULT_PREAMBLE
 from .pipeline import RECORD, run
 from .retrieval import Retriever, RetrievalPolicy, terms
@@ -182,6 +184,47 @@ class StructuralTactics(FixedTactics):
         return out + [(t, sc) for t, sc in extra if t not in have]
 
 
+# a case on any match left in the goal, keeping each case's equation: simpl
+# turns Nat.max (S a) x into a match on x, filter leaves an if (a match on a
+# bool), and a later case on the same scrutinee needs the earlier equation
+# for its contradictory branch to close
+CASES_EQ = ("repeat match goal with |- context [match ?x with _ => _ end] => "
+            "let E := fresh in destruct x eqn:E end")
+CLOSE_EQ = "first [lia | nia | congruence | (rewrite IH; reflexivity) | (f_equal; assumption)]"
+AGAIN = "rewrite ?list_max_app, ?list_sum_app, ?app_length in *; simpl in *"
+
+
+class StructuralTacticsV2(StructuralTactics):
+    """structural-tactics/v1, plus the two shapes tools/subclassify_opens.py
+    found missing in run 7's residue (results/subclassify-102.md): a case on
+    a match that simpl leaves, keeping its equation, and simpl again after a
+    library rewrite (list_max (rev l) = list_max l: rev unfolds to ++, and
+    list_max_app leaves list_max [a] to simplify)."""
+    identity = {"id": "structural-tactics/v2", "model": None, "provider": None}
+
+    def propose(self, obs, path, last_failure=None, tried=None):
+        out = super().propose(obs, path, last_failure, tried)
+        if not obs.goals:
+            return out
+        g = obs.goals[0]
+        ctx = hypothesis_vars(g.hypotheses)
+        lists = [v for v in ctx.get(L, []) if not v.startswith("IH")]
+        extra = []
+        for v in lists:
+            extra += [
+                (f"induction {v} as [|a t IH]; simpl in *; {CASES_EQ}; simpl in *; "
+                 f"{CASES_EQ}; simpl in *; {CLOSE_EQ}.", 0.9),
+                (f"induction {v} as [|a t IH]; simpl in *; {AGAIN}; {IFS}; simpl in *; "
+                 f"{CLOSE}.", 0.9),
+                (f"induction {v} as [|a t IH]; simpl in *; {CASES_EQ}; simpl in *.", 0.45)]
+        if "match" in g.conclusion or "if " in g.conclusion:
+            extra += [(f"{CASES_EQ}; simpl in *; {CLOSE_EQ}.", 0.85),
+                      (f"{CASES_EQ}; simpl in *.", 0.5)]
+        extra.append((f"{AGAIN}; {CLOSE}.", 0.8))
+        have = {t for t, _ in out}
+        return out + [(t, sc) for t, sc in extra if t not in have]
+
+
 def lemma_terms(stmt):
     """The constants and operators a statement's conclusion mentions."""
     body = stmt.split(", ", 1)[1] if stmt.startswith("forall") else stmt
@@ -202,13 +245,23 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
     proof; lia because a discovered inequality is mostly a step inside
     arithmetic, which apply cannot use."""
 
-    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3, top_corpus=4):
+    def __init__(self, base, corpus, top=6, score=0.7, per_lemma=3, top_corpus=4,
+                 saturate=False, saturate_cap=30, corpus_forms="pose"):
         super().__init__(base, top, score)
+        self.saturate, self.saturate_cap = saturate, saturate_cap
+        # "pose": pose proof (L x); lia only (as through run 9). "all": also
+        # rewrite L, rewrite <- L and apply L, which find the instance by
+        # unification (insert_length at sort t, inside an induction), and an
+        # induction that solves the trivial cases so the step case comes first
+        self.corpus_forms = corpus_forms
         self.retriever = LibraryRetriever()
         self.corpus = [(c["name"], c["statement"], lemma_terms(c["statement"])) for c in corpus]
         self.per_lemma, self.top_corpus = per_lemma, top_corpus
         self.identity = dict(self.identity,
-                             id=f"retrieval/v1+corpus-index/v2+{base.identity['id']}")
+                             id=f"retrieval/v1+corpus-index/v2"
+                                f"{'+forms/v1' if corpus_forms == 'all' else ''}"
+                                f"{'+saturate/v1' if saturate else ''}"
+                                f"+{base.identity['id']}")
 
     def corpus_lemmas(self, conclusion, hypotheses=()):
         goal = set(terms(conclusion, hypotheses))
@@ -229,6 +282,17 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         cost["corpus_lemmas"] = [n for n, _ in found]
         mine = []
         for i, (name, stmt) in enumerate(found):
+            if self.corpus_forms == "all":
+                concl = stmt.rsplit(" -> ", 1)[-1]
+                close = "first [lia | reflexivity | congruence | assumption]"
+                forms = ([f"rewrite {name}; {close}.", f"rewrite <- {name}; {close}.",
+                          f"rewrite {name}.", f"rewrite <- {name}."] if " = " in concl else [])
+                forms += [f"apply {name}; assumption.", f"apply {name}.",
+                          f"eapply {name}; eassumption."]
+                for t in forms:
+                    if t not in have:
+                        have.add(t)
+                        mine.append((t, self.score + 0.04 - 0.01 * i))
             pools = [ctx.get(ty, []) for _, ty in binders(stmt)]
             for args in itertools.islice(itertools.product(*pools), self.per_lemma):
                 t = f"pose proof ({' '.join((name,) + args)}); lia."
@@ -238,10 +302,100 @@ class CorpusRetrievalPolicy(RetrievalPolicy):
         # A node's candidates are tried in order, so the discovered lemmas go
         # before the library's: a corpus that grows would otherwise push its
         # own lemmas past the step budget behind library lemmas Search found.
+        if self.corpus_forms == "all":
+            # Induction that closes the trivial cases, so the step case is the
+            # first goal: the corpus index reads only the first goal, and a
+            # discovered lemma is used at the step case (sort_length needs
+            # insert_length there), behind a base case otherwise.
+            for v in [v for v in ctx.get(L, []) if not v.startswith("IH")]:
+                t = (f"induction {v} as [|a t IH]; simpl in *; "
+                     f"try solve [lia | reflexivity | constructor].")
+                if t not in have:
+                    have.add(t)
+                    mine.append((t, self.score))
+        sat = self.saturation(g) if self.saturate else None
+        if sat and sat not in have:
+            mine.append((sat, self.score))
         library = set(cost["added"])
         cost["added"] = [t for t, _ in mine] + cost["added"]
         return ([x for x in out if x[0] not in library] + mine
                 + [x for x in out if x[0] in library])
+
+    def saturation(self, g):
+        """One step that states every discovered lemma the goal's terms allow,
+        at the goal's subterms (its variables when the goal cannot be read),
+        and does not close: the next step's closers (lia) use them. A chain
+        of several lemmas (removelast and filter are monotone, max is at
+        most the sum) is out of reach of one-lemma pose proof; this offers
+        the chain in one step. It leaves the node to the cheap closers
+        first: it comes after them and after the one-lemma forms."""
+        if any(h.startswith("SAT") for h in g.hypotheses):
+            return None             # stated already on this path
+        goal_terms = set(terms(g.conclusion, g.hypotheses))
+        pool = hypothesis_vars(g.hypotheses)
+        pool = {L: list(pool.get(L, [])), N: list(pool.get(N, []))}
+        try:
+            lhs, rhs, _ = parse_statement(g.conclusion)
+            for t in list(_subterms(lhs)) + list(_subterms(rhs)):
+                if t.op not in VARS and t.vars():
+                    text = f"({t.coq()})"
+                    if text not in pool[t.type]:
+                        pool[t.type].append(text)
+        except (ValueError, AssertionError, IndexError, TypeError, KeyError):
+            pass
+        poses = []
+        for name, stmt, ts in self.corpus:
+            if not ts or not ts <= goal_terms | {'"<="', '"="'}:
+                continue
+            for args in itertools.product(*[pool[ty] for _, ty in binders(stmt)]):
+                poses.append(f"pose proof ({' '.join((name,) + args)}) as SAT{len(poses)}")
+                if len(poses) >= self.saturate_cap:
+                    break
+            if len(poses) >= self.saturate_cap:
+                break
+        return "; ".join(poses) + "." if len(poses) >= 2 else None
+
+
+def _closes_from(session, node, steps, timeout=5):
+    obs = None
+    try:
+        for tac in steps:
+            node, obs = session.run(node, tac, timeout)
+    except Exception:
+        return False
+    return bool(obs and obs.finished)
+
+
+def minimize(stmt, pre, proof, backend="coqtop"):
+    """A proof with each saturation step cut down to the lemmas it needs:
+    drop each stated lemma in turn and keep the drop if the proof still
+    closes. A saturation step states up to 30 lemmas; without this, a proof
+    would cite every one of them, and the count of multi-lemma proofs would
+    be inflated by lemmas it never used. One session: each trial branches
+    from the state before the step."""
+    proof = list(proof)
+    if not any("as SAT" in t for t in proof):
+        return proof
+    s = open_session(pre, stmt, backend)
+    try:
+        node = s.root
+        for i, tac in enumerate(proof):
+            if "as SAT" in tac:
+                poses = [p.strip() for p in tac.rstrip(".").split(";")]
+                k = 0
+                while k < len(poses):
+                    trial = poses[:k] + poses[k + 1:]
+                    step = [("; ".join(trial) + ".")] if trial else []
+                    if _closes_from(s, node, step + proof[i + 1:]):
+                        poses = trial
+                    else:
+                        k += 1
+                proof[i] = ("; ".join(poses) + ".") if poses else None
+            if proof[i] is not None:
+                node, _ = s.run(node, proof[i], 5)
+        return [t for t in proof if t is not None]
+    finally:
+        s.close()
 
 
 def corollary(stmt, pre, corpus, backend="coqtop", timeout=2):
@@ -278,6 +432,7 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
     check = EDGE + [random_env(rng) for _ in range(2000)]
     wrng = random.Random(seed + 11)
     wide_check = [wide_env(wrng) for _ in range(1000)]
+    small_check = small_envs()
     classes = enumerate_classes(max_term, envs, SIGNATURES[signature])
     seen, pool = set(exclude), []
     for c in candidates(classes, min_size, max_size, congruence="exact"):
@@ -293,6 +448,11 @@ def candidate_stream(seed=2, max_term=5, min_size=3, max_size=9, exclude=(), sta
             stats["refuted_by_testing"] = stats.get("refuted_by_testing", 0) + 1
         elif not holds(c[0], c[1], c[2], wide_check):
             stats["refuted_by_wide_testing"] = stats.get("refuted_by_wide_testing", 0) + 1
+        elif counterexample(c[0], c[1], c[2], small_check) is not None:
+            # recorded with its counterexample, like the number-only drops
+            stats["refuted_by_small_lists"] = stats.get("refuted_by_small_lists", 0) + 1
+            stats.setdefault("small_counterexamples", []).append(
+                {"statement": s, "counterexample": counterexample(c[0], c[1], c[2], small_check)})
         elif nat_instance(*c, arng):
             stats["nat_instance"] = stats.get("nat_instance", 0) + 1
             stats.setdefault("nat_forms", []).append((s, nat_abstraction(*c)))
@@ -313,8 +473,10 @@ def lemma_text(name, stmt, proof):
     return f"Lemma {name} : {stmt}.\nProof. {' '.join(proof)} Qed.\n"
 
 
-def preamble(corpus):
-    return BASE + ("\n" + "".join(lemma_text(c["name"], c["statement"], c["proof"])
+def preamble(corpus, base=None):
+    """base: what the corpus is stated over (BASE, or a development's
+    definitions: devgen.preamble())."""
+    return (base or BASE) + ("\n" + "".join(lemma_text(c["name"], c["statement"], c["proof"])
                                   for c in corpus) if corpus else "")
 
 
@@ -362,13 +524,13 @@ def certify_drops(forms, coqc="coqc"):
     return [s for s, f in forms if compile_corpus(text([(s, f)]), coqc) != "ok"]
 
 
-def axioms(corpus, coqc="coqc"):
+def axioms(corpus, coqc="coqc", base=None):
     """Print Assumptions on every corpus lemma: {name: [axioms]} for any that
     rests on one. A kernel-checked proof from an axiom proves only what the
     axiom asserts, so the corpus must be closed under the global context."""
     if not corpus:
         return {}
-    text = preamble(corpus) + "\n" + "".join(f"Print Assumptions {c['name']}.\n" for c in corpus)
+    text = preamble(corpus, base) + "\n" + "".join(f"Print Assumptions {c['name']}.\n" for c in corpus)
     d = tempfile.mkdtemp()
     try:
         path = os.path.join(d, "assumptions.v")
@@ -441,15 +603,20 @@ def _load(path):
 def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), seed=2,
             max_term=5, min_size=3, max_size=9, backend="coqtop", retrieval_top=6,
             log=print, statements=None, signature="base", require_new=False,
-            prover="fixed"):
+            prover="fixed", saturate=False, base=None, retry_open=False,
+            corpus_forms="pose"):
     """statements: an explicit candidate list to use instead of the generator
     (tests; or a curated batch). Excluded statements are dropped from it too.
     signature / require_new: explore the wide signature, optionally only its
     new operations' candidates. A run can change signature between rounds
     (rerun with more rounds and the new signature): rounds done under another
     signature do not replay this stream. prover: "fixed" (fixed-tactics/v1
-    under both passes) or "structural" (structural-tactics/v1)."""
-    base = {"fixed": FixedTactics, "structural": StructuralTactics}[prover]
+    under both passes), "structural" (structural-tactics/v1) or
+    "structural2" (structural-tactics/v2)."""
+    base_pre = base
+    base = prover if isinstance(prover, type) else {
+        "fixed": FixedTactics, "structural": StructuralTactics,
+        "structural2": StructuralTacticsV2}[prover]
     os.makedirs(out, exist_ok=True)
     corpus_path = os.path.join(out, "corpus.jsonl")
     summary_path = os.path.join(out, "rounds.jsonl")
@@ -459,7 +626,8 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
               else candidate_stream(seed, max_term, min_size, max_size, set(exclude), dropped,
                                     signature, tuple(WIDE) if require_new else ()))
     sig = signature + ("+new-only" if require_new else "")
-    requeue, certified, queue, seeded = [], 0, [], set()
+    requeue, certified, queue, seeded, retry = [], 0, [], set(), []
+    recorded_small = 0
     srng = random.Random(seed + 7)
     seed_check = (EDGE + [random_env(srng) for _ in range(2000)]
                   + [wide_env(srng) for _ in range(1000)])
@@ -471,6 +639,7 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
             if done[r].get("signature", "base") == sig:
                 list(zip(range(take), stream))
             requeue, queue = q.get("requeue", []), q.get("seeds", [])
+            retry = q.get("retry", [])
             seeded = set(q.get("seeded", []))
             certified = q.get("certified", certified)
             log(f"round {r}: done before ({done[r]['proved']} proved)")
@@ -481,14 +650,19 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
         from_seeds, queue = queue[:cap], queue[cap:]
         take = per_round - len(requeue) - len(from_seeds)
         fresh_batch = [s for _, s in zip(range(take), stream)]
-        batch = list(dict.fromkeys(requeue + [x["statement"] for x in from_seeds] + fresh_batch))
+        # retry_open: what the last round left open comes back first, since the
+        # corpus has grown since (a main theorem needs a helper proved in the
+        # same round it was first tried)
+        batch = list(dict.fromkeys(retry + requeue + [x["statement"] for x in from_seeds]
+                                   + fresh_batch))
+        from_retry, retry = len(retry), []
         seed_of = {x["statement"]: x for x in from_seeds}
         requeue = []
         if not batch:
             log("no candidates left")
             break
         seen_names = {c["name"] for c in corpus}
-        pre = preamble(corpus)
+        pre = preamble(corpus, base_pre)
         rdir = os.path.join(out, f"round-{r}")
         log(f"round {r}: {len(batch)} candidates, corpus {len(corpus)} lemmas")
         os.makedirs(rdir, exist_ok=True)
@@ -521,7 +695,9 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                 step_budget=step_budget - half, backend=backend, jobs=jobs,
                 log=lambda *_: None,
                 policy_factory=lambda: CorpusRetrievalPolicy(base(), corpus,
-                                                             top=retrieval_top))
+                                                             top=retrieval_top,
+                                                             saturate=saturate,
+                                                             corpus_forms=corpus_forms))
             second = rec.load(os.path.join(rdir, "retrieval", RECORD))
             rows = [x for x in rows if x["standing"] != "open"] + rec.corpus(second)
         eps = {e["data"]["episode"]: e["data"] for e in first if e["kind"] == "episode"}
@@ -541,7 +717,11 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                          and x["statement"] not in known),
                         key=lambda x: (len(x["statement"]), x["statement"]))
         for row in proved:
-            t = corollary(row["statement"], preamble(corpus + new), corpus + new, backend) \
+            if any("as SAT" in t for t in row["proof"]):
+                # cite only the lemmas the proof uses (minimize)
+                row = dict(row, proof=minimize(row["statement"], pre, row["proof"], backend))
+            t = corollary(row["statement"], preamble(corpus + new, base_pre), corpus + new,
+                          backend) \
                 if new else None
             if t:
                 derived.append(derivation(row["statement"], t, "after_proof", row["proof"]))
@@ -557,23 +737,31 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                         "kernel": row["kernel"]})
         with open(der_path, "w") as fh:
             fh.writelines(json.dumps(d) + "\n" for d in derived)
+        if retry_open:
+            settled = {c["statement"] for c in corpus + new} | {d["statement"] for d in derived}
+            retry = [x["statement"] for x in rows
+                     if x["standing"] == "open" and x["statement"] not in settled]
         t0 = time.perf_counter()
-        check = compile_corpus(preamble(corpus + new))
+        check = compile_corpus(preamble(corpus + new, base_pre))
         compile_s = round(time.perf_counter() - t0, 2)
         if check != "ok":
             raise RuntimeError(f"round {r}: the corpus does not compile with the new lemmas: "
                                f"{check}")
-        bad = axioms(corpus + new)
+        bad = axioms(corpus + new, base=base_pre)
         if bad:
             raise RuntimeError(f"round {r}: corpus lemmas rest on axioms: {bad}")
         corpus += new
         with open(corpus_path, "a") as fh:
             fh.writelines(json.dumps(c) + "\n" for c in new)
         with open(os.path.join(out, "corpus.v"), "w") as fh:
-            fh.write(preamble(corpus))
+            fh.write(preamble(corpus, base_pre))
         # The number-only drops are certified, not just tested: each one's
         # nat law is proved by lia / nia. One that is not goes back to the
         # prover in the next round.
+        small = dropped.get("small_counterexamples", [])
+        with open(os.path.join(rdir, "refuted.jsonl"), "w") as fh:
+            fh.writelines(json.dumps(x) + "\n" for x in small[recorded_small:])
+        recorded_small = len(small)
         forms = dropped.get("nat_forms", [])[certified:]
         requeue = certify_drops(forms)
         certified += len(forms)
@@ -600,10 +788,12 @@ def explore(out, rounds=4, per_round=80, step_budget=600, jobs=1, exclude=(), se
                    "seeds_proposed": len(fresh_seeds),
                    "proved_from_seeds": sum(c["source"] != "generator" for c in new),
                    "axiom_free": True,
-                   "queue_after": {"requeue": requeue, "seeds": queue,
+                   "from_retry": from_retry,
+                   "queue_after": {"requeue": requeue, "seeds": queue, "retry": retry,
                                    "seeded": sorted(seeded), "certified": certified},
                    "dropped_before_gate_so_far": {k: v for k, v in dropped.items()
-                                                  if k != "nat_forms"},
+                                                  if k not in ("nat_forms",
+                                                               "small_counterexamples")},
                    "nat_drops_certified": len(forms) - len(requeue),
                    "nat_drops_requeued": requeue, "gate": dict(gate),
                    "known_by_corpus": known_by_corpus,

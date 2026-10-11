@@ -395,8 +395,15 @@ It runs on CPU and needs no model.
 
 - **Reflection (grounded critique).** v2, once v1 has a measured baseline;
   the exact error string it needs is already in the policy's view.
-- **oscillate-.** `CoqEnv(observers=[fn])` calls `fn(step)` on every step;
-  that is where a phase reader attaches. It is not implemented here.
+- **oscillate.** Not part of the current architecture. A calibration of a fixed phase
+  reading on run 9's records (`results/oscillate-calibration.md`, plan in
+  `docs/oscillate-calibration.md`) was inconclusive by its pre-stated rule:
+  - AUC 0.96 at telling proof steps from other successful steps, about the reward's 0.90;
+  - AUC 0.44 at forecasting from the first 50 steps whether a search ends proved, its
+    intended use.
+
+  The empty `phase` field stays in the record schema until a learning policy exists to
+  calibrate it on. `CoqEnv(observers=[fn])` is still where a reader would attach.
 - **Training (DPO, then GRPO).** The run record holds every step, failed
   steps included, with both verdicts and the reward; `record.steps()` reads them.
 

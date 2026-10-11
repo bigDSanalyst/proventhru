@@ -1,0 +1,85 @@
+{
+ "candidates_checked": 53,
+ "refuted_by_small_inputs": 0,
+ "candidates": 53,
+ "by_kind": {
+  "equation": 14,
+  "fact": 14,
+  "conditional": 25
+ },
+ "mentioning": {
+  "insert": 11,
+  "sort": 44,
+  "sorted": 5
+ },
+ "gate": {
+  "open": 50,
+  "trivial": 3
+ },
+ "elaborate": 53,
+ "gold": {
+  "insert_length": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat) (n : nat), length (insert n l1) = S (length l1)",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat) (n : nat), length (insert n l1) = S (length l1)",
+   "gate": "open"
+  },
+  "sort_length": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat), length (sort l1) = length l1",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat), length (sort l1) = length l1",
+   "gate": "open"
+  },
+  "insert_sorted": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat) (n : nat), sorted l1 -> sorted (insert n l1)",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat) (n : nat), sorted l1 -> sorted (insert n l1)",
+   "gate": "open"
+  },
+  "insert_perm": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat) (n : nat), Permutation (n :: l1) (insert n l1)",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat) (n : nat), Permutation (n :: l1) (insert n l1)",
+   "gate": "open"
+  },
+  "sorted_sort_id": {
+   "role": "helper",
+   "statement": "forall (l1 : list nat), sorted l1 -> sort l1 = l1",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat), sorted l1 -> sort l1 = l1",
+   "gate": "open"
+  },
+  "insert_In": {
+   "role": "helper",
+   "match": "not expressible"
+  },
+  "sort_sorted": {
+   "role": "main",
+   "statement": "forall (l1 : list nat), sorted (sort l1)",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat), sorted (sort l1)",
+   "gate": "open"
+  },
+  "sort_perm": {
+   "role": "main",
+   "statement": "forall (l1 : list nat), Permutation l1 (sort l1)",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat), Permutation l1 (sort l1)",
+   "gate": "open"
+  },
+  "sort_idem": {
+   "role": "main",
+   "statement": "forall (l1 : list nat), sort (sort l1) = sort l1",
+   "match": "exact",
+   "candidate": "forall (l1 : list nat), sort (sort l1) = sort l1",
+   "gate": "open"
+  }
+ },
+ "gold_helpers_proposed": 5,
+ "gold_helpers": 6,
+ "gold_main_proposed": 3
+}

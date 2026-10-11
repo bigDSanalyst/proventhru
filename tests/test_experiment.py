@@ -565,6 +565,81 @@ class TestExplore(unittest.TestCase):
             rows = rec.corpus(rec.load(os.path.join(out, RECORD)))
         self.assertEqual([r["standing"] for r in rows], ["proved"] * 3)
 
+    def test_subclassify_finds_small_counterexamples_and_match_cases(self):
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+        from subclassify_opens import combined_scripts, false_small
+        from proventhru.explore import BASE
+        from proventhru.gate import _first_closing
+        from proventhru.session import open_session
+        self.assertTrue(false_small(
+            "forall (l1 : list nat), length (removelast (removelast (removelast l1))) "
+            "<= list_sum l1"))
+        self.assertFalse(false_small("forall (l1 : list nat), list_max l1 <= list_sum l1"))
+        # simpl leaves a match on list_max (map S t) that only a case on it opens
+        stmt = "forall (l1 : list nat), list_max l1 <= list_max (map S l1)"
+        s = open_session(BASE, stmt, "coqtop")
+        try:
+            self.assertIsNotNone(_first_closing(s, combined_scripts(stmt), 10))
+        finally:
+            s.close()
+
+    def test_structural_v2_proves_the_foundations_v1_cannot(self):
+        from proventhru import record as rec
+        from proventhru.explore import BASE, StructuralTactics, StructuralTacticsV2
+        from proventhru.pipeline import RECORD, run
+        stmts = ["forall (l1 : list nat), list_max (rev l1) = list_max l1",
+                 "forall (l1 : list nat), list_max l1 <= list_max (map S l1)"]
+        standing = {}
+        for k, pol in (("v1", StructuralTactics), ("v2", StructuralTacticsV2)):
+            with tempfile.TemporaryDirectory() as out:
+                run(stmts, out, BASE, budget=None, step_budget=150, backend="coqtop",
+                    log=lambda *_: None, policy_factory=pol)
+                standing[k] = [r["standing"] for r in rec.corpus(rec.load(os.path.join(out, RECORD)))]
+        self.assertEqual(standing["v2"], ["proved", "proved"])
+        self.assertNotEqual(standing["v1"], ["proved", "proved"])
+
+    def test_small_lists_drop_a_false_bound_with_its_counterexample(self):
+        from proventhru.explore import candidate_stream
+        bad = ("forall (l1 : list nat), length (removelast (removelast (removelast l1))) "
+               "<= list_sum l1")
+        stats = {}
+        kept = [s for _, s in zip(range(400), candidate_stream(stats=stats))]
+        self.assertNotIn(bad, kept)
+        cx = [x for x in stats.get("small_counterexamples", []) if x["statement"] == bad]
+        if cx:      # reached within the first 400; its counterexample is all zeros
+            self.assertEqual(set(cx[0]["counterexample"]["l1"]), {0})
+
+    def test_saturation_proves_a_chain_and_minimizing_keeps_only_used_lemmas(self):
+        from proventhru import record as rec
+        from proventhru.explore import (LEMMA_NAME, CorpusRetrievalPolicy, StructuralTacticsV2,
+                                        minimize, preamble)
+        from proventhru.pipeline import RECORD, run
+        corpus = [
+            {"name": "pt_r0_2", "statement": "forall (l1 : list nat), list_max (rev l1) = list_max l1",
+             "proof": ["intros.", "induction l1 as [|a t IH]; simpl in *; rewrite ?list_max_app, "
+                       "?list_sum_app, ?app_length in *; simpl in *; first [lia | nia]."]},
+            {"name": "pt_r0_16",
+             "statement": "forall (l1 : list nat), list_max (removelast l1) <= list_max l1",
+             "proof": ["intros.", "induction l1 as [|a t IH]; simpl in *; [first [lia | nia] | "
+                       "destruct t; simpl in *; first [lia | nia]]."]},
+            {"name": "pt_r0_5", "statement": "forall (l1 : list nat), length l1 <= list_sum (map S l1)",
+             "proof": ["intros.", "induction l1.", "reflexivity.", "simpl.", "lia."]}]
+        # removelast is monotone at rev l1, and rev keeps list_max: a chain of two
+        stmt = "forall (l1 : list nat), list_max (removelast (rev l1)) <= list_max l1"
+        pre = preamble(corpus)
+        found = {}
+        for sat in (False, True):
+            with tempfile.TemporaryDirectory() as out:
+                run([stmt], out, pre, budget=None, step_budget=200, backend="coqtop",
+                    log=lambda *_: None, policy_factory=lambda: CorpusRetrievalPolicy(
+                        StructuralTacticsV2(), corpus, saturate=sat))
+                found[sat] = rec.corpus(rec.load(os.path.join(out, RECORD)))[0]
+        self.assertEqual(found[False]["standing"], "open")
+        self.assertEqual(found[True]["standing"], "proved")
+        small = minimize(stmt, pre, found[True]["proof"])
+        self.assertEqual(sorted(set(LEMMA_NAME.findall(" ".join(small)))), ["pt_r0_16", "pt_r0_2"])
+
     def test_retrieval_offers_a_retrieved_corpus_lemma_inside_arithmetic(self):
         from types import SimpleNamespace as NS
         from proventhru.explore import CorpusRetrievalPolicy

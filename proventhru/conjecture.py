@@ -178,6 +178,30 @@ def holds(lhs, rhs, rel, envs):
     return True
 
 
+def counterexample(lhs, rhs, rel, envs):
+    """The first env where the candidate fails, or None."""
+    for e in envs:
+        a, b = lhs.eval(e), rhs.eval(e)
+        if a is None or b is None:
+            continue
+        if (rel == "=" and a != b) or (rel == "<=" and not a <= b):
+            return e
+    return None
+
+
+def small_envs(length=5, alphabet=(0, 1, 2)):
+    """Every list of length at most `length` over `alphabet` as l1, against a
+    few fixed values of l2, n and m: complete coverage of small lists, where
+    random inputs rarely put four zeros in one list."""
+    out = []
+    for k in range(length + 1):
+        for lst in itertools.product(alphabet, repeat=k):
+            for l2 in ((), (1, 0), lst[::-1]):
+                for n, m in ((0, 0), (2, 1), (1, 3)):
+                    out.append({"l1": lst, "l2": l2, "n": n, "m": m})
+    return out
+
+
 def canonical_names(lhs, rhs):
     """Variables renamed in order of first use, so l2 ++ [] = l2 and
     l1 ++ [] = l1 are one candidate."""
