@@ -1,0 +1,637 @@
+{
+ "features": [
+  "cov_share",
+  "cov_all",
+  "back_share",
+  "back_all",
+  "is_eq",
+  "rel_match",
+  "premises",
+  "log_len",
+  "head_match",
+  "log_rank",
+  "nat_name",
+  "prior"
+ ],
+ "forbidden_sets": [
+  "examples/ranker_H.txt",
+  "examples/ranker_rest.txt",
+  "examples/eval_test.txt",
+  "examples/eval_test_renamed.txt"
+ ],
+ "gradient_norm": 3.0707081753188233e-12,
+ "intercept": -5.1914033969745415,
+ "iterations": 10,
+ "mean": [
+  0.4697500071672244,
+  0.06803130644190247,
+  0.6668753357374617,
+  0.24503311258278146,
+  0.8103552077062011,
+  0.29981938591210117,
+  0.3889223359422035,
+  4.165714114807555,
+  0.2456351595424443,
+  1.0889425452131234,
+  0.2721252257676099,
+  0.058727414747149494
+ ],
+ "positives": 93,
+ "prior_m": 5.0,
+ "prior_rate": 0.055990367248645395,
+ "prior_table": {
+  "Arith_prebase.le_n_0_eq_stt": [
+   0,
+   36
+  ],
+  "Arith_prebase.le_plus_minus_r_stt": [
+   0,
+   19
+  ],
+  "Arith_prebase.le_plus_minus_stt": [
+   0,
+   14
+  ],
+  "Arith_prebase.minus_diag_reverse_stt": [
+   0,
+   3
+  ],
+  "Arith_prebase.mult_O_le_stt": [
+   0,
+   32
+  ],
+  "BinInt.ZL0": [
+   0,
+   4
+  ],
+  "Minus.not_le_minus_0_stt": [
+   0,
+   18
+  ],
+  "Nat.add_0_l": [
+   0,
+   4
+  ],
+  "Nat.add_0_r": [
+   0,
+   4
+  ],
+  "Nat.add_1_l": [
+   0,
+   1
+  ],
+  "Nat.add_nocarry_mod_lt_pow2": [
+   0,
+   6
+  ],
+  "Nat.div_pow2_bits": [
+   0,
+   4
+  ],
+  "Nat.eq_le_incl": [
+   0,
+   18
+  ],
+  "Nat.even_0": [
+   0,
+   52
+  ],
+  "Nat.even_1": [
+   0,
+   38
+  ],
+  "Nat.even_2": [
+   0,
+   46
+  ],
+  "Nat.even_sub": [
+   0,
+   69
+  ],
+  "Nat.even_succ": [
+   0,
+   4
+  ],
+  "Nat.le_0_r": [
+   0,
+   48
+  ],
+  "Nat.log2_mul_pow2": [
+   0,
+   4
+  ],
+  "Nat.log2_pow2": [
+   0,
+   1
+  ],
+  "Nat.log2_pred_pow2": [
+   0,
+   8
+  ],
+  "Nat.log2_unique": [
+   0,
+   8
+  ],
+  "Nat.log2_up_pow2": [
+   0,
+   1
+  ],
+  "Nat.max_0_l": [
+   0,
+   1
+  ],
+  "Nat.max_0_r": [
+   0,
+   1
+  ],
+  "Nat.max_id": [
+   0,
+   1
+  ],
+  "Nat.max_l": [
+   0,
+   1
+  ],
+  "Nat.max_l_iff": [
+   0,
+   1
+  ],
+  "Nat.max_r": [
+   0,
+   1
+  ],
+  "Nat.max_r_iff": [
+   0,
+   1
+  ],
+  "Nat.max_spec": [
+   0,
+   1
+  ],
+  "Nat.max_spec_le": [
+   0,
+   1
+  ],
+  "Nat.min_l": [
+   0,
+   2
+  ],
+  "Nat.min_l_iff": [
+   0,
+   2
+  ],
+  "Nat.min_r": [
+   0,
+   2
+  ],
+  "Nat.min_r_iff": [
+   0,
+   2
+  ],
+  "Nat.min_spec": [
+   0,
+   2
+  ],
+  "Nat.min_spec_le": [
+   0,
+   2
+  ],
+  "Nat.mod_pow2_bits_high": [
+   0,
+   4
+  ],
+  "Nat.mul_0_l": [
+   0,
+   8
+  ],
+  "Nat.mul_0_r": [
+   0,
+   7
+  ],
+  "Nat.mul_1_l": [
+   0,
+   5
+  ],
+  "Nat.mul_1_r": [
+   0,
+   3
+  ],
+  "Nat.mul_pow2_bits_add": [
+   0,
+   4
+  ],
+  "Nat.mul_pow2_bits_low": [
+   0,
+   8
+  ],
+  "Nat.ones_add": [
+   0,
+   4
+  ],
+  "Nat.ones_mod_pow2": [
+   0,
+   4
+  ],
+  "Nat.pow_add_r": [
+   0,
+   4
+  ],
+  "Nat.pow_inj_r": [
+   0,
+   8
+  ],
+  "Nat.pow_neg_r": [
+   0,
+   2
+  ],
+  "Nat.pow_succ_r": [
+   0,
+   3
+  ],
+  "Nat.sub_0_le": [
+   10,
+   30
+  ],
+  "Nat.sub_add": [
+   0,
+   21
+  ],
+  "NoDup_count_occ": [
+   0,
+   10
+  ],
+  "Pnat.Pmult_nat_mult": [
+   0,
+   5
+  ],
+  "Pnat.ZL6": [
+   0,
+   1
+  ],
+  "Refl.make_impl_map": [
+   0,
+   4
+  ],
+  "Tauto.add_term_correct": [
+   0,
+   2
+  ],
+  "Tauto.eval_cnf_cons": [
+   0,
+   2
+  ],
+  "Tauto.eval_cnf_cons_iff": [
+   0,
+   1
+  ],
+  "Tauto.map_simpl": [
+   0,
+   3
+  ],
+  "app_length": [
+   11,
+   19
+  ],
+  "app_nil_end_deprecated": [
+   0,
+   6
+  ],
+  "app_nil_l": [
+   0,
+   4
+  ],
+  "app_nth2": [
+   0,
+   14
+  ],
+  "app_nth2_plus": [
+   0,
+   4
+  ],
+  "app_removelast_last": [
+   0,
+   13
+  ],
+  "concat_length": [
+   0,
+   46
+  ],
+  "count_occ_bound": [
+   6,
+   16
+  ],
+  "count_occ_cons_neq": [
+   0,
+   1
+  ],
+  "count_occ_map": [
+   0,
+   7
+  ],
+  "destruct_list": [
+   0,
+   1
+  ],
+  "filter_app": [
+   0,
+   12
+  ],
+  "filter_length": [
+   0,
+   3
+  ],
+  "filter_length_forallb": [
+   0,
+   1
+  ],
+  "filter_length_le": [
+   3,
+   82
+  ],
+  "firstn_all": [
+   0,
+   1
+  ],
+  "firstn_all2": [
+   0,
+   44
+  ],
+  "firstn_app": [
+   0,
+   16
+  ],
+  "firstn_app_2": [
+   0,
+   4
+  ],
+  "firstn_le_length": [
+   3,
+   41
+  ],
+  "firstn_length": [
+   1,
+   1
+  ],
+  "firstn_length_le": [
+   0,
+   40
+  ],
+  "firstn_map": [
+   0,
+   2
+  ],
+  "firstn_removelast": [
+   0,
+   8
+  ],
+  "firstn_rev": [
+   0,
+   20
+  ],
+  "firstn_skipn_rev": [
+   0,
+   19
+  ],
+  "flat_map_length": [
+   0,
+   29
+  ],
+  "fold_left_app": [
+   0,
+   1
+  ],
+  "fold_left_length": [
+   0,
+   1
+  ],
+  "fold_left_rev_right": [
+   0,
+   1
+  ],
+  "fold_symmetric": [
+   1,
+   1
+  ],
+  "last_length": [
+   0,
+   24
+  ],
+  "list_max_app": [
+   7,
+   52
+  ],
+  "list_max_le": [
+   0,
+   37
+  ],
+  "list_sum_app": [
+   29,
+   57
+  ],
+  "map_app": [
+   4,
+   16
+  ],
+  "map_cons": [
+   0,
+   4
+  ],
+  "map_eq_app": [
+   0,
+   2
+  ],
+  "map_eq_cons": [
+   0,
+   4
+  ],
+  "map_last": [
+   0,
+   21
+  ],
+  "map_length": [
+   5,
+   16
+  ],
+  "map_rev": [
+   1,
+   9
+  ],
+  "mult_n_O": [
+   0,
+   3
+  ],
+  "natr_ring_lemma1": [
+   0,
+   4
+  ],
+  "natr_ring_lemma2": [
+   0,
+   4
+  ],
+  "nodup_inv": [
+   0,
+   1
+  ],
+  "nth_error_None": [
+   0,
+   7
+  ],
+  "nth_error_app2": [
+   0,
+   94
+  ],
+  "nth_middle": [
+   0,
+   5
+  ],
+  "nth_nth_nth_map": [
+   0,
+   32
+  ],
+  "nth_overflow": [
+   0,
+   11
+  ],
+  "plus_O_n": [
+   0,
+   4
+  ],
+  "plus_n_O": [
+   0,
+   4
+  ],
+  "prod_length": [
+   0,
+   1
+  ],
+  "remove_cons": [
+   0,
+   1
+  ],
+  "remove_length_le": [
+   0,
+   3
+  ],
+  "removelast_app": [
+   0,
+   9
+  ],
+  "removelast_firstn": [
+   0,
+   8
+  ],
+  "removelast_firstn_len": [
+   1,
+   9
+  ],
+  "removelast_last": [
+   0,
+   19
+  ],
+  "rev_app_distr": [
+   2,
+   7
+  ],
+  "rev_append_rev": [
+   0,
+   8
+  ],
+  "rev_eq_app": [
+   0,
+   5
+  ],
+  "rev_involutive": [
+   2,
+   2
+  ],
+  "rev_length": [
+   7,
+   15
+  ],
+  "rev_nth": [
+   0,
+   2
+  ],
+  "rev_repeat": [
+   0,
+   1
+  ],
+  "rev_unit": [
+   0,
+   8
+  ],
+  "seq_S": [
+   0,
+   1
+  ],
+  "skipn_all2": [
+   0,
+   42
+  ],
+  "skipn_app": [
+   0,
+   16
+  ],
+  "skipn_map": [
+   0,
+   6
+  ],
+  "skipn_rev": [
+   0,
+   19
+  ],
+  "split_length_l": [
+   0,
+   3
+  ],
+  "split_length_r": [
+   0,
+   1
+  ]
+ },
+ "refused_rows": 0,
+ "rows": 1661,
+ "sd": [
+  0.20051632469783823,
+  0.2517996183192399,
+  0.216314254016489,
+  0.43010683128819677,
+  0.39201995491255354,
+  0.4581787006653501,
+  0.5334992178074502,
+  0.6213383166776812,
+  0.4304631551468686,
+  0.6026667685834259,
+  0.4450540273590838,
+  0.10776895870311305
+ ],
+ "sources": [
+  {
+   "path": "results/ranker/D0.jsonl",
+   "sha256": "d60bad63099373e52ce9bef5ca20fd58722d8fea333c4db3d0163396f40982e6"
+  },
+  {
+   "path": "results/ranker/D1p.jsonl",
+   "sha256": "279e67411162f0079aff79fd6e6dbf502d708f3e17dc7c79b6dc8f97dec5d0d6"
+  },
+  {
+   "path": "results/ranker/D2p.jsonl",
+   "sha256": "1bd9b3ce5cf767124377bd40c39e3cf5357b8a5dc43013992a2f931e03a0f696"
+  }
+ ],
+ "version": "lemma-ranker/v1",
+ "weights": [
+  0.18156331409962115,
+  0.291651339061342,
+  0.6974528879832806,
+  0.030861561415541937,
+  -0.2456472623797311,
+  0.5477362718389533,
+  -0.6154507163807456,
+  0.866064378177187,
+  0.43838904920853283,
+  -0.09518548619495924,
+  0.31535469448775033,
+  1.1950690351658537
+ ]
+}

@@ -1,0 +1,18 @@
+{
+ "distinct_positive_lemmas": 4,
+ "dropped": {
+  "goal_mismatch": 0,
+  "no_goal": 0,
+  "not_in_pool": 0,
+  "repeated": 0,
+  "repeated_with_disagreeing_labels": 0,
+  "replay": 0,
+  "top6_mismatch_nodes": 0
+ },
+ "episodes": 11,
+ "files": [
+  "ranker/target1/T1-R1/records.jsonl"
+ ],
+ "positives": 11,
+ "rows": 142
+}
