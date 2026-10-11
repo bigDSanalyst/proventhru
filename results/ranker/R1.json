@@ -1,0 +1,561 @@
+{
+ "features": [
+  "cov_share",
+  "cov_all",
+  "back_share",
+  "back_all",
+  "is_eq",
+  "rel_match",
+  "premises",
+  "log_len",
+  "head_match",
+  "log_rank",
+  "nat_name",
+  "prior"
+ ],
+ "forbidden_sets": [
+  "examples/ranker_H.txt",
+  "examples/ranker_rest.txt",
+  "examples/eval_test.txt",
+  "examples/eval_test_renamed.txt"
+ ],
+ "gradient_norm": 6.044805704919369e-10,
+ "intercept": -5.627842891543951,
+ "iterations": 10,
+ "mean": [
+  0.46102346869217997,
+  0.07293796864349011,
+  0.6576095882707959,
+  0.23858214042263123,
+  0.8016359918200409,
+  0.29107021131561006,
+  0.37491479209270623,
+  4.158418129510579,
+  0.2556237218813906,
+  1.0920798584496163,
+  0.27334696659850033,
+  0.050509810732168724
+ ],
+ "positives": 72,
+ "prior_m": 5.0,
+ "prior_rate": 0.049079754601226995,
+ "prior_table": {
+  "Arith_prebase.le_n_0_eq_stt": [
+   0,
+   36
+  ],
+  "Arith_prebase.le_plus_minus_r_stt": [
+   0,
+   7
+  ],
+  "Arith_prebase.le_plus_minus_stt": [
+   0,
+   2
+  ],
+  "Arith_prebase.minus_diag_reverse_stt": [
+   0,
+   1
+  ],
+  "Arith_prebase.mult_O_le_stt": [
+   0,
+   32
+  ],
+  "BinInt.ZL0": [
+   0,
+   4
+  ],
+  "Minus.not_le_minus_0_stt": [
+   0,
+   9
+  ],
+  "Nat.add_0_l": [
+   0,
+   4
+  ],
+  "Nat.add_0_r": [
+   0,
+   4
+  ],
+  "Nat.add_1_l": [
+   0,
+   1
+  ],
+  "Nat.add_nocarry_mod_lt_pow2": [
+   0,
+   6
+  ],
+  "Nat.div_pow2_bits": [
+   0,
+   4
+  ],
+  "Nat.eq_le_incl": [
+   0,
+   18
+  ],
+  "Nat.even_0": [
+   0,
+   52
+  ],
+  "Nat.even_1": [
+   0,
+   38
+  ],
+  "Nat.even_2": [
+   0,
+   46
+  ],
+  "Nat.even_sub": [
+   0,
+   69
+  ],
+  "Nat.even_succ": [
+   0,
+   4
+  ],
+  "Nat.le_0_r": [
+   0,
+   48
+  ],
+  "Nat.log2_mul_pow2": [
+   0,
+   4
+  ],
+  "Nat.log2_pow2": [
+   0,
+   1
+  ],
+  "Nat.log2_pred_pow2": [
+   0,
+   8
+  ],
+  "Nat.log2_unique": [
+   0,
+   8
+  ],
+  "Nat.log2_up_pow2": [
+   0,
+   1
+  ],
+  "Nat.mod_pow2_bits_high": [
+   0,
+   4
+  ],
+  "Nat.mul_0_l": [
+   0,
+   8
+  ],
+  "Nat.mul_0_r": [
+   0,
+   7
+  ],
+  "Nat.mul_1_l": [
+   0,
+   5
+  ],
+  "Nat.mul_1_r": [
+   0,
+   3
+  ],
+  "Nat.mul_pow2_bits_add": [
+   0,
+   4
+  ],
+  "Nat.mul_pow2_bits_low": [
+   0,
+   8
+  ],
+  "Nat.ones_add": [
+   0,
+   4
+  ],
+  "Nat.ones_mod_pow2": [
+   0,
+   4
+  ],
+  "Nat.pow_add_r": [
+   0,
+   4
+  ],
+  "Nat.pow_inj_r": [
+   0,
+   8
+  ],
+  "Nat.pow_neg_r": [
+   0,
+   2
+  ],
+  "Nat.pow_succ_r": [
+   0,
+   3
+  ],
+  "Nat.sub_0_le": [
+   1,
+   12
+  ],
+  "Nat.sub_add": [
+   0,
+   9
+  ],
+  "NoDup_count_occ": [
+   0,
+   10
+  ],
+  "Pnat.Pmult_nat_mult": [
+   0,
+   5
+  ],
+  "Pnat.ZL6": [
+   0,
+   1
+  ],
+  "Refl.make_impl_map": [
+   0,
+   4
+  ],
+  "Tauto.add_term_correct": [
+   0,
+   2
+  ],
+  "Tauto.eval_cnf_cons": [
+   0,
+   2
+  ],
+  "Tauto.eval_cnf_cons_iff": [
+   0,
+   1
+  ],
+  "Tauto.map_simpl": [
+   0,
+   2
+  ],
+  "app_length": [
+   8,
+   15
+  ],
+  "app_nil_end_deprecated": [
+   0,
+   6
+  ],
+  "app_nil_l": [
+   0,
+   4
+  ],
+  "app_nth2": [
+   0,
+   1
+  ],
+  "app_nth2_plus": [
+   0,
+   2
+  ],
+  "app_removelast_last": [
+   0,
+   12
+  ],
+  "concat_length": [
+   0,
+   44
+  ],
+  "count_occ_bound": [
+   6,
+   16
+  ],
+  "count_occ_cons_neq": [
+   0,
+   1
+  ],
+  "count_occ_map": [
+   0,
+   7
+  ],
+  "destruct_list": [
+   0,
+   1
+  ],
+  "filter_app": [
+   0,
+   12
+  ],
+  "filter_length": [
+   0,
+   3
+  ],
+  "filter_length_forallb": [
+   0,
+   1
+  ],
+  "filter_length_le": [
+   3,
+   82
+  ],
+  "firstn_all2": [
+   0,
+   44
+  ],
+  "firstn_app": [
+   0,
+   1
+  ],
+  "firstn_app_2": [
+   0,
+   2
+  ],
+  "firstn_le_length": [
+   3,
+   41
+  ],
+  "firstn_length_le": [
+   0,
+   40
+  ],
+  "firstn_map": [
+   0,
+   2
+  ],
+  "firstn_removelast": [
+   0,
+   6
+  ],
+  "firstn_rev": [
+   0,
+   19
+  ],
+  "firstn_skipn_rev": [
+   0,
+   19
+  ],
+  "flat_map_length": [
+   0,
+   28
+  ],
+  "fold_left_app": [
+   0,
+   1
+  ],
+  "fold_left_length": [
+   0,
+   1
+  ],
+  "fold_left_rev_right": [
+   0,
+   1
+  ],
+  "fold_symmetric": [
+   1,
+   1
+  ],
+  "last_length": [
+   0,
+   21
+  ],
+  "list_max_app": [
+   6,
+   49
+  ],
+  "list_max_le": [
+   0,
+   37
+  ],
+  "list_sum_app": [
+   23,
+   51
+  ],
+  "map_app": [
+   4,
+   15
+  ],
+  "map_cons": [
+   0,
+   3
+  ],
+  "map_eq_app": [
+   0,
+   2
+  ],
+  "map_eq_cons": [
+   0,
+   3
+  ],
+  "map_last": [
+   0,
+   20
+  ],
+  "map_length": [
+   5,
+   16
+  ],
+  "map_rev": [
+   1,
+   9
+  ],
+  "mult_n_O": [
+   0,
+   3
+  ],
+  "natr_ring_lemma1": [
+   0,
+   4
+  ],
+  "natr_ring_lemma2": [
+   0,
+   4
+  ],
+  "nodup_inv": [
+   0,
+   1
+  ],
+  "nth_error_None": [
+   0,
+   7
+  ],
+  "nth_error_app2": [
+   0,
+   69
+  ],
+  "nth_middle": [
+   0,
+   5
+  ],
+  "nth_nth_nth_map": [
+   0,
+   31
+  ],
+  "nth_overflow": [
+   0,
+   11
+  ],
+  "plus_O_n": [
+   0,
+   4
+  ],
+  "plus_n_O": [
+   0,
+   4
+  ],
+  "prod_length": [
+   0,
+   1
+  ],
+  "remove_cons": [
+   0,
+   1
+  ],
+  "remove_length_le": [
+   0,
+   3
+  ],
+  "removelast_app": [
+   0,
+   9
+  ],
+  "removelast_firstn": [
+   0,
+   6
+  ],
+  "removelast_firstn_len": [
+   0,
+   7
+  ],
+  "removelast_last": [
+   0,
+   18
+  ],
+  "rev_app_distr": [
+   2,
+   7
+  ],
+  "rev_append_rev": [
+   0,
+   8
+  ],
+  "rev_eq_app": [
+   0,
+   5
+  ],
+  "rev_involutive": [
+   2,
+   2
+  ],
+  "rev_length": [
+   7,
+   15
+  ],
+  "rev_nth": [
+   0,
+   2
+  ],
+  "rev_repeat": [
+   0,
+   1
+  ],
+  "rev_unit": [
+   0,
+   8
+  ],
+  "seq_S": [
+   0,
+   1
+  ],
+  "skipn_all2": [
+   0,
+   42
+  ],
+  "skipn_app": [
+   0,
+   1
+  ],
+  "skipn_map": [
+   0,
+   6
+  ],
+  "skipn_rev": [
+   0,
+   19
+  ],
+  "split_length_l": [
+   0,
+   3
+  ],
+  "split_length_r": [
+   0,
+   1
+  ]
+ },
+ "refused_rows": 0,
+ "rows": 1467,
+ "sd": [
+  0.2048516035898538,
+  0.26003465417834587,
+  0.21772095280584985,
+  0.42621673206713506,
+  0.39876776253696516,
+  0.4542558127314386,
+  0.5362121081383006,
+  0.6381142971853587,
+  0.43621122715136523,
+  0.6008559829552486,
+  0.4456774645973247,
+  0.09339929016469771
+ ],
+ "sources": [
+  {
+   "path": "results/ranker/D0.jsonl",
+   "sha256": "d60bad63099373e52ce9bef5ca20fd58722d8fea333c4db3d0163396f40982e6"
+  }
+ ],
+ "version": "lemma-ranker/v1",
+ "weights": [
+  0.055608448531389916,
+  0.49339295590322924,
+  0.5913650684318893,
+  0.21533182472310983,
+  -0.27607175561362746,
+  0.22471090470680055,
+  -0.506666770355868,
+  0.8961300356341925,
+  0.7649645389036067,
+  -0.09696895297283152,
+  -0.20151717633171393,
+  1.0347560618331604
+ ]
+}
