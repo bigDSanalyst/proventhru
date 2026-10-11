@@ -173,3 +173,22 @@ None.
 - gained class (a): `forall (l1 l2 : list nat), Nat.min (length l1) (list_max l1) <= length (l2 ++ l1)`
   - proof under 3: `intros. rewrite app_length. lia.`; library lemmas: app_length (B′ position 11)
 
+## Run notes (written by hand after the report was generated)
+
+- **Three windows.** The schedule ran in three windows on 2026-10-11 (UTC): 08:48–10:48,
+  11:04–13:04 and 19:40–20:28. Each window resumed the same records, and the scheduler
+  checks the doc and code hashes before it resumes anything. The first two windows were
+  stopped by the session's 2-hour limit.
+- **T1-R1.** The first window stopped during T1-R1 with three searches in flight. Their
+  episodes have no outcome. The second window searched those three statements again, and
+  those outcomes are the ones counted: each of T1-R1's 300 statements has exactly one
+  outcome. D1 was extracted after that.
+- **Run 3.** The second window stopped during run 3 at 254 of 300 statements. No search was
+  left without an outcome. The third window searched the remaining 46.
+- **The machine.** The container was restarted between the second and third windows. The
+  new one has the same CPU (4 × Intel Xeon @ 2.10 GHz), the same memory (15 GB) and the
+  same Coq (8.18.0). The records' environment line (`coq-8.18.0`, coqtop) is the same in
+  every run. Outcomes can depend on load (Timeout 5, a 30 s deadline). The last 46 statements
+  of run 3, and runs 3p and X, ran on the new container.
+- **The records** aren't in the repository. Their sizes and heads are in
+  `results/rsi-target1-records.md`, and the xz archives are held by the project owner.
