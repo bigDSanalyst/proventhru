@@ -3,8 +3,8 @@
 Version: v1
 Written: 2026-10-10. A draft first (a19ea21). The code it governs came after the draft
 and was reconciled with it before freezing: 4397977, 95d301d and the freezing commit.
-Status: draft, under review. It takes effect at the commit that removes this line.
-- **What gets registered.** That commit goes in `docs/frozen.md` with rows for:
+Status: in force from the commit that removed its draft line.
+- **What gets registered.** That commit is in `docs/frozen.md`, with rows for:
   - this file's sha256;
   - a hash over the code it governs (`code:target-1`, `tools/ranker_schedule.GOVERNED`);
   - D0 and the four set files.
