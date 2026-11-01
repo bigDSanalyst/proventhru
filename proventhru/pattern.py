@@ -35,6 +35,13 @@ SOURCES = ("List", "Permutation")        # the library modules patterns are read
 HARNESS = ("Require Import Arith Lia List Permutation.", "Import ListNotations.",
            "From ISortPilot Require Import ISort ISortTest ISortDec.")
 PROPOSER = "pattern/analogy-v1"
+# pattern/analogy-v2 (docs/pattern-run-2.md) widens the signature: the Sorted
+# module too, its relation variables set to le (the development's order), and
+# the constructor equations of the library's first-order list functions.
+PROPOSER_V2 = "pattern/analogy-v2"
+SOURCES_V2 = ("List", "Permutation", "Sorted")
+EQUATION_MODULES = ("Datatypes", "List")
+RELATION = "le"
 NAT, LIST, PROP = "nat", "list nat", "Prop"
 # The development's symbols, by the shape they can stand for: (argument types,
 # result type) once the element type is nat. "insert a" is insert with a fresh
@@ -222,10 +229,17 @@ def is_sort(ty):
     return ty in (("id", "Type"), ("id", "Set"))
 
 
-def specialize(t):
+def is_relation(ty):
+    """A binary relation on nat: forall (_ : nat) (_ : nat), Prop."""
+    binders, res = flatten(ty)
+    return res == ("id", PROP) and [render(b) for _, b in binders] == [NAT, NAT]
+
+
+def specialize(t, relation=None):
     """(data binders, hypotheses, conclusion) with every type variable set to
-    nat; ParseError when the statement is outside the first-order nat /
-    list nat fragment (the message says how)."""
+    nat, and, given a relation, every binary relation variable set to it;
+    ParseError when the statement is outside the first-order nat / list nat
+    fragment (the message says how)."""
     binders, body = flatten(t)
     env, data, hyps = {}, [], []
     for i, (name, ty) in enumerate(binders):
@@ -233,6 +247,9 @@ def specialize(t):
             env[name] = ("id", NAT)
             continue
         ty = subst(ty, env)
+        if relation and name != "_" and is_relation(ty):
+            env[name] = ("id", relation)
+            continue
         r = render(ty)
         if r in (NAT, LIST):
             data.append((name, r))
@@ -333,6 +350,14 @@ def kind(source, symbols):
 
 # ---------------------------------------------------------------- Coq
 
+def with_extra(extra):
+    """The harness's commands with extra library imports before the
+    development's: Coq.Sorting.Sorted, for one, still defines the notation
+    sort := Sorted, which an import after ISort would put over the
+    development's own sort."""
+    return list(HARNESS[:-1]) + list(extra) + [HARNESS[-1]]
+
+
 def build_harness():
     for f in ("ISort", "ISortTest", "ISortDec"):
         src, vo = os.path.join(HERE, f + ".v"), os.path.join(HERE, f + ".vo")
@@ -345,10 +370,10 @@ class Coq:
     """One coqtop with the harness loaded. Without notations, it prints
     terms the way parse() reads them; with them, the way the prover sees."""
 
-    def __init__(self, notations, deadline=300.0):
+    def __init__(self, notations, deadline=300.0, extra=()):
         build_harness()
         self.top = Coqtop(args=("-Q", HERE, "ISortPilot"), deadline=deadline)
-        for c in HARNESS:
+        for c in with_extra(extra):
             self.must(c)
         if not notations:
             self.must("Unset Printing Notations.")
@@ -394,7 +419,8 @@ def shape_of(coq, name, cache):
     """(argument types, result type) of a constant with its type variables set
     to nat, or None when it isn't a first-order function or predicate."""
     if name not in cache:
-        text, err = coq.run(f"Check @{name}.")
+        f, _, rel = name.partition("@")
+        text, err = coq.run(f"Check (@{f} {NAT} {rel})." if rel else f"Check @{name}.")
         shape = None
         if not err:
             try:
@@ -414,13 +440,14 @@ def shape_of(coq, name, cache):
     return cache[name]
 
 
-def theorems(coq, entries, count):
+def theorems(coq, entries, count, relation=None):
     """[(name, data, hyps, concl)]: the entries that are first-order theorems
-    over nat and list nat once their element type is nat."""
+    over nat and list nat once their element type is nat (and, given a
+    relation, their relation variables are it)."""
     out = []
     for name, text in entries:
         try:
-            data, hyps, concl = specialize(parse(text))
+            data, hyps, concl = specialize(parse(text), relation)
         except ParseError as e:
             count("outside the parser's grammar" if "expected" in str(e) or "atom" in str(e)
                   or "unexpected" in str(e) or "trailing" in str(e)
@@ -434,18 +461,41 @@ def theorems(coq, entries, count):
     return out
 
 
-def proposals(coq, entries, log=lambda *_: None):
+def fold(t, rel):
+    """f rel x ... written as the one symbol f@rel applied to x ..., so a
+    predicate over the relation (Sorted le) can be substituted like a constant."""
+    k = t[0]
+    if k == "app":
+        h, args = t[1], tuple(fold(a, rel) for a in t[2])
+        if h[0] == "id" and args and args[0] == ("id", rel):
+            return apply(("id", f"{h[1]}@{rel}"), list(args[1:]))
+        return apply(fold(h, rel), list(args))
+    if k in ("forall", "fun"):
+        return (k, tuple((ns, fold(ty, rel), imp) for ns, ty, imp in t[1]), fold(t[2], rel))
+    return t
+
+
+def unfold(t, rel):
+    """fold's inverse: f@rel back to f rel."""
+    names = [n for n in free(t) if n.endswith("@" + rel)]
+    return subst(t, {n: ("app", ("id", n.split("@")[0]), (("id", rel),)) for n in names})
+
+
+def proposals(coq, entries, log=lambda *_: None, relation=None):
     """(candidates, counts): every substitution of the development's symbols
     for library symbols of the same shape, in every library theorem, one or
-    two symbols at a time, each at every occurrence of its symbol."""
+    two symbols at a time, each at every occurrence of its symbol. Given a
+    relation, a predicate applied to it (Sorted le) counts as one symbol."""
     counts, cache, out = {}, {}, []
 
     def count(reason):
         counts[reason] = counts.get(reason, 0) + 1
 
-    lemmas = theorems(coq, entries, count)
+    lemmas = theorems(coq, entries, count, relation)
     log(f"{len(entries)} library entries, {len(lemmas)} first-order theorems; {counts}")
     for name, data, hyps, concl in lemmas:
+        if relation:
+            hyps, concl = [fold(h, relation) for h in hyps], fold(concl, relation)
         bound = {n for n, _ in data}
         syms = [s for s in free(statement([], hyps, concl)) if s not in bound]
         options = [(s, t) for s in syms for t in SHAPES.get(shape_of(coq, s, cache), ())]
@@ -463,12 +513,66 @@ def proposals(coq, entries, log=lambda *_: None):
                     env[s] = ("app", ("id", "insert"), (("id", a),))
                 else:
                     env[s] = ("id", target)
-            d, h, c = rename(extra + data, [subst(x, env) for x in hyps], subst(concl, env))
-            out.append({"source": name, "substitution": dict(pick),
-                        "kind": kind((data, hyps, concl), [s for s, _ in pick]),
+            hs, cc = [subst(x, env) for x in hyps], subst(concl, env)
+            k = kind((data, hyps, concl), [s for s, _ in pick])
+            if relation:
+                hs, cc = [unfold(x, relation) for x in hs], unfold(cc, relation)
+            d, h, c = rename(extra + data, hs, cc)
+            out.append({"source": name, "substitution": dict(pick), "kind": k,
                         "data": d, "hyps": [render(x) for x in h], "concl": render(c),
                         "prefix": render(statement(d, h, c)), "key": key(d, h, c)})
     return out, counts
+
+
+def equations(coq, modules=EQUATION_MODULES, log=lambda *_: None):
+    """[(name, statement)]: the constructor equations of the modules' first-order
+    functions over list nat, as Coq's cbn computes them. For each list argument
+    and each constructor, f's application to nil or to cons a l is simplified,
+    and if cbn made progress, f (...) = what it gave (<-> for a predicate) is
+    a source theorem, named f:nil@i or f:cons@i. Definitional: each is true by
+    computation, and the gate would close it; it's a pattern, not a candidate."""
+    cache, out = {}, []
+    for name, _ in harvest(coq, modules):
+        shape = shape_of(coq, name, cache)
+        if not shape or LIST not in shape[0] or not all(a in (NAT, LIST) for a in shape[0]):
+            continue
+        args, res = shape
+        names = [("x" if a == NAT else "l") + str(j) for j, a in enumerate(args)]
+        for i, a in enumerate(args):
+            if a != LIST:
+                continue
+            for ctor, bind, term in (("nil", [], "nil"), ("cons", [("a", NAT), ("t", LIST)],
+                                                         "(cons a t)")):
+                vs = [(n, ty) for j, (n, ty) in enumerate(zip(names, args)) if j != i] + bind
+                call = " ".join([name] + [term if j == i else n for j, n in enumerate(names)])
+                lam = f"fun {' '.join(f'({n} : {ty})' for n, ty in vs)} => {call}" if vs \
+                    else call
+                text, err = coq.run(f"Eval cbn in ({lam}).")
+                if err:
+                    continue
+                printed = text.split("=", 1)[1].split("\n     :")[0].strip()
+                try:
+                    got = parse(printed)
+                except ParseError:
+                    continue                 # match or fix left in the result: no clean equation
+                if vs:
+                    if got[0] != "fun":
+                        continue
+                    outer = [n for ns, _, _ in got[1] for n in ns]
+                    body = subst(got[2], {o: ("id", n) for o, (n, _) in zip(outer, vs)
+                                          if o != "_"})
+                else:
+                    body = got
+                lhs = parse(call)
+                if body == lhs:
+                    continue                 # cbn made no progress
+                rel = "iff" if res == PROP else "eq"
+                stmt = ("app", ("id", rel), (lhs, body))
+                if vs:
+                    stmt = ("forall", tuple(((n,), parse(ty), False) for n, ty in vs), stmt)
+                out.append((f"{name}:{ctor}@{i}", render(stmt)))
+    log(f"{len(out)} constructor equations from {', '.join(modules)}")
+    return out
 
 
 # ---------------------------------------------------------------- testing
@@ -568,14 +672,14 @@ def disproof(c, result):
             f"intro H; refine (decide_false _ _ (H {args})); vm_compute; reflexivity.")
 
 
-def certify_disproofs(items, timeout=1800):
+def certify_disproofs(items, timeout=1800, extra=()):
     """[accepted | rejected] per (statement, tactic): compiled against the
     harness, many to a file, each checked axiom-free by Print Assumptions. A
     file that doesn't compile is split until each failure is on its own."""
     if not items:
         return []
     build_harness()
-    lines = list(HARNESS)
+    lines = with_extra(extra)
     for i, (stmt, tac) in enumerate(items):
         lines += [f"Lemma refuted_{i} : {stmt}.", f"Proof. {tac} Qed.",
                   f"Print Assumptions refuted_{i}."]
@@ -589,7 +693,8 @@ def certify_disproofs(items, timeout=1800):
         if len(items) == 1:
             return ["rejected"]
         half = len(items) // 2
-        return certify_disproofs(items[:half], timeout) + certify_disproofs(items[half:], timeout)
+        return certify_disproofs(items[:half], timeout, extra) + \
+            certify_disproofs(items[half:], timeout, extra)
     verdicts = re.findall(r"Closed under the global context|Axioms:", p.stdout)
     if len(verdicts) != len(items):
         raise RuntimeError(f"{len(verdicts)} assumption reports for {len(items)} disproofs")
