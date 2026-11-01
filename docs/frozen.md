@@ -25,3 +25,5 @@ A `code:` row is a hash over the files its owner lists, not a file: `code:target
 | `docs/pattern-run-1.md` | v1 | `e8b31596d574963140773827f377ba0c238ce05db6f5d0500724c41b333256da` | `9192904` | 2026-10-11 |
 | `code:pattern-run-1` | v1 | `c31a3eee4e7967cbe2210d4b1e274a9969af0b1304d9f6984bd681ff3062e3ed` | `9192904` | 2026-10-11 |
 | `code:pattern-run-1` | v2 | `d69317c6039673f620a3b19941b886bb82781cc6b6e7ec4d1a9fecdf20071b8c` | `3e84939` | 2026-11-01 |
+| `docs/rsi-target2-prover-dpo.md` | v1 | `0218d1ab8d4aa486111bf7efa50dca26d5f7f1da6da360333c0489c3e60f4d89` | `c5f7e8e` | 2026-11-01 |
+| `code:target-2-pairs` | v1 | `75769d9224e45220c2a39283b7f50badc902e68d7cffe78aa1a6f6eb3fbe94d5` | `c5f7e8e` | 2026-11-01 |
