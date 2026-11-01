@@ -44,7 +44,14 @@ RUNS = {
         "proposer": pattern.PROPOSER_V2, "sources": pattern.SOURCES_V2,
         "relation": pattern.RELATION, "equations": True, "extra": ("Require Import Sorted.",),
         "strict_connects": True},
+    3: {"spec": "docs/pattern-run-3.md", "row": "code:pattern-run-3",
+        "proposer": pattern.PROPOSER_V2, "sources": pattern.SOURCES_V2,
+        "relation": pattern.RELATION, "equations": True, "extra": ("Require Import Sorted.",),
+        "strict_connects": True, "closed_novelty": True, "previous": 2},
 }
+# Run 3's novelty: a statement one constructor step closes is present in the
+# development (its own inductives' constructors) or the library (theirs).
+CONSTRUCTOR_CLOSERS = ("intros; constructor.", "intros; constructor; assumption.")
 RUN = 1
 CFG = RUNS[RUN]
 SPEC, CODE_ROW = CFG["spec"], CFG["row"]
@@ -364,6 +371,17 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
         r["refuted"] = r["refuted_by_test"] or r["gate"] == "refuted"
         r["proved"] = st in by_stmt
         r["gold"] = sorted(n for n, ks in gold_keys.items() if r["key"] in ks)
+        if CFG.get("closed_novelty") and r["novel"]:
+            # run 3: the development is its definitions, its constructors and its
+            # held-out lemmas; what's present in it isn't novel
+            r["present_by"] = None
+            if r["gold"]:
+                r["present_by"] = "gold: " + ", ".join(r["gold"])
+            elif not r["refuted"]:
+                tac = follows(base_pre, st, CONSTRUCTOR_CLOSERS)
+                if tac:
+                    r["present_by"] = "one constructor step: " + tac
+            r["novel"] = r["present_by"] is None
     proved = [r for r in rows if r["novel"] and r["proved"]]
 
     # (a) implies a development statement; gold overlap up to derivation
@@ -479,6 +497,8 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
         "derived": dict(Counter(r["derived"] for r in rows if r["derived"])),
         "novel": len(novel), "novel_not_refuted": sum(not r["refuted"] for r in novel),
         "proved_novel": len(proved), "significant": len(signif),
+        "present_in_development": sum(bool(r.get("present_by")) for r in rows),
+        "gold_proved": sorted({g for r in rows if r["proved"] for g in r["gold"]}),
         "significant_not_gold": sum(not r["gold"] for r in signif),
         "significant_by": {k: sum(r["significant"][k] for r in proved)
                            for k in ("implies", "simplifies", "used", "connects")},
@@ -514,6 +534,42 @@ def candidates_file(rows, dest):
     dump([{k: r[k] for k in keep if k in r} for r in rows], dest)
 
 
+def buckets(rows):
+    """The residue's buckets: (kind, test outcome, gate status) of the novel,
+    unrefuted, unproved candidates."""
+    return {(k, r["test"]["status"], r.get("gate")) for r in rows
+            if r.get("novel") and not r.get("refuted") and not r.get("proved")
+            for k in r["kinds"]}
+
+
+def stopping(s, rows):
+    """Run 3's reading of the stopping rule (docs/pattern-run-3.md): the
+    previous run counted under this run's novelty, and the residue's buckets
+    against the previous run's."""
+    prev = CFG["previous"]
+    old = load(os.path.join(HERE, "results", f"pattern-run-{prev}-candidates.jsonl"))
+    base_pre = base_preamble()
+    old_sig = [r for r in old if r.get("novel") and r.get("proved")
+               and any((r.get("significant") or {}).values())]
+    kept = [r for r in old_sig if not r.get("gold")
+            and not follows(base_pre, r["statement"], CONSTRUCTOR_CLOSERS)]
+    new_buckets = sorted(buckets(rows) - buckets(old), key=str)
+    out = ["## The stopping rule, as docs/pattern-run-3.md reads it", "",
+           f"- Statements present in the development (a held-out lemma, or one constructor "
+           f"step), so not novel here: {s['present_in_development']}. Held-out lemmas proved: "
+           f"{', '.join(s['gold_proved']) or 'none'}.",
+           f"- Significant novel conjectures under this run's novelty: run {prev} "
+           f"{len(kept)} (of its {len(old_sig)} by its own rules), run {RUN} {s['significant']}.",
+           f"- Residue buckets (kind, test, gate) new against run {prev}: "
+           f"{', '.join(map(str, new_buckets)) or 'none'}."]
+    if not kept and not s["significant"] and not new_buckets:
+        out.append(f"- **Two consecutive runs with no significant novel conjecture, and no new "
+                   f"residue bucket: by the metrics doc's stopping rule, `{CFG['proposer']}` "
+                   f"stops here, and this null is the finding.**")
+    out.append("")
+    return out
+
+
 def report(out, summary, rows, reg, harvest, dest):
     proved = [r for r in rows if r["novel"] and r["proved"]]
     L = [f"# Pattern extractor, run {RUN}: results", "",
@@ -541,8 +597,10 @@ def report(out, summary, rows, reg, harvest, dest):
           f"| necessary novelty | {s['necessary_novelty']} | |", "",
           f"Significant by criterion: {s['significant_by']}.",
           f"Gold overlap (exact): {', '.join(s['gold_overlap']) or 'none'}. "
-          f"Up to derivation: {', '.join(s['gold_overlap_up_to_derivation']) or 'none'}.", "",
-          "## Where the candidates went", "",
+          f"Up to derivation: {', '.join(s['gold_overlap_up_to_derivation']) or 'none'}.", ""]
+    if CFG.get("closed_novelty"):
+        L += stopping(s, rows)
+    L += ["## Where the candidates went", "",
           f"- Testing: {s['tested']}; refuted and certified {s['refuted_by_test']}; "
           f"uncertified refutations sent on {s['uncertified_refutations']}; tested vacuously "
           f"{s['tested_vacuously']}.",

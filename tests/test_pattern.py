@@ -168,6 +168,22 @@ class TestInCoq(unittest.TestCase):
             R.configure(1)
         self.assertLess(pre.index("Require Import Sorted."), pre.index("Fixpoint sort"))
 
+    def test_one_constructor_step_is_present_in_the_development(self):
+        import sys
+        sys.path.insert(0, "tools")
+        import pattern_run as R
+        R.configure(3)
+        try:
+            pre = R.base_preamble()
+            ctor = R.follows(pre, "forall (n : nat) (l1 : list nat) (m : nat), sorted (n :: l1) -> "
+                                  "m <= n -> sorted (m :: n :: l1)", R.CONSTRUCTOR_CLOSERS)
+            helper = R.follows(pre, "forall (l1 : list nat) (n : nat), sorted l1 -> "
+                                    "sorted (insert n l1)", R.CONSTRUCTOR_CLOSERS)
+        finally:
+            R.configure(1)
+        self.assertEqual(ctor, "intros; constructor; assumption.")    # sorted_cons, premises swapped
+        self.assertIsNone(helper)                                      # needs an induction
+
     def test_sorted_le_stands_for_sorted(self):
         coq = P.Coq(notations=False, extra=("Require Import Sorted.",))
         try:
