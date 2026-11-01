@@ -1,6 +1,7 @@
-"""Pattern extractor run 1, end to end, as docs/pattern-run-1.md fixes it.
+"""A pattern extractor run, end to end, as its spec fixes it
+(docs/pattern-run-1.md, docs/pattern-run-2.md).
 
-    python tools/pattern_run.py --out OUT [--jobs 3]
+    python tools/pattern_run.py --run N --out OUT [--jobs 3]
 
 Each step resumes from its output in OUT:
   1. propose  harvest.json, proposals.jsonl: every library theorem of List and
@@ -10,11 +11,11 @@ Each step resumes from its output in OUT:
   3. prove    run/: the loop (isort pilot 2b-ii settings) on what passed, what
               couldn't be tested, and refutations that didn't certify
   4. score    significance/ (the (b) searches), score.json
-  5. report   results/pattern-run-1.md
+  5. report   results/pattern-run-N.md
 
-Before anything runs, it refuses unless docs/pattern-run-1.md and the governed
-code (GOVERNED) match their docs/frozen.md rows, and docs/pattern-metrics.md
-matches its own. Every record the run writes is annotated with those hashes
+Before anything runs, it refuses unless the run's spec and the governed code
+(GOVERNED) match their docs/frozen.md rows, and docs/pattern-metrics.md matches
+its own. A run whose code row is closed doesn't run again. Every record the run writes is annotated with those hashes
 and the harvest's.
 """
 import argparse
@@ -33,7 +34,39 @@ from proventhru import devgen, pattern  # noqa: E402
 from proventhru import record as rec  # noqa: E402
 from proventhru.session import CoqTimeout  # noqa: E402
 
-SPEC, METRICS, CODE_ROW = "docs/pattern-run-1.md", "docs/pattern-metrics.md", "code:pattern-run-1"
+METRICS = "docs/pattern-metrics.md"
+# What each registered run is. Run 1's settings are the code's v1 behaviour.
+RUNS = {
+    1: {"spec": "docs/pattern-run-1.md", "row": "code:pattern-run-1",
+        "proposer": pattern.PROPOSER, "sources": pattern.SOURCES, "relation": None,
+        "equations": False, "extra": (), "strict_connects": False},
+    2: {"spec": "docs/pattern-run-2.md", "row": "code:pattern-run-2",
+        "proposer": pattern.PROPOSER_V2, "sources": pattern.SOURCES_V2,
+        "relation": pattern.RELATION, "equations": True, "extra": ("Require Import Sorted.",),
+        "strict_connects": True},
+}
+RUN = 1
+CFG = RUNS[RUN]
+SPEC, CODE_ROW = CFG["spec"], CFG["row"]
+
+
+def configure(n):
+    global RUN, CFG, SPEC, CODE_ROW, CANDIDATES
+    RUN, CFG = n, RUNS[n]
+    SPEC, CODE_ROW = CFG["spec"], CFG["row"]
+    CANDIDATES = os.path.join(HERE, "results", f"pattern-run-{n}-candidates.jsonl")
+
+
+def base_preamble():
+    """The prover's preamble: the development's definitions, with what the run
+    adds imported before them (see pattern.with_extra: Sorted's notation sort
+    must not cover the development's sort)."""
+    pre, mark = devgen.preamble(), "Import ListNotations."
+    if not CFG["extra"]:
+        return pre
+    if mark not in pre:
+        raise RuntimeError("the development's preamble has no ListNotations import to follow")
+    return pre.replace(mark, " ".join((mark,) + tuple(CFG["extra"])), 1)
 GOVERNED = [
     "pilots/isort/ISort.v", "pilots/isort/ISortTest.v", "pilots/isort/ISortDec.v",
     "proventhru/conjecture.py", "proventhru/coqtop.py", "proventhru/devgen.py", "proventhru/env.py",
@@ -47,7 +80,7 @@ STEPS = 600
 TEST_DEADLINE = 120.0           # seconds per test command; past it, the candidate is untested
 ROUNDS = 4
 GOLD_FILE = os.path.join(pattern.HERE, "ISortGold.v")
-CANDIDATES = os.path.join(HERE, "results", "pattern-run-1-candidates.jsonl")
+CANDIDATES = os.path.join(HERE, "results", f"pattern-run-{RUN}-candidates.jsonl")
 LOGICAL = {"eq", "iff", "and", "or", "not", "True", "False", "le", "lt"}
 VOCAB_OWN = set(pattern.OWN)
 
@@ -82,6 +115,8 @@ def preflight():
         out[label] = digest
     codes = [r for r in rows if r[0] == CODE_ROW]
     current = code_hash(HERE)
+    if codes and codes[-1][1].strip() == "closed":
+        raise SystemExit(f"`{CODE_ROW}` is closed: run {RUN} is finished")
     if not codes or codes[-1][2] != current:
         raise SystemExit(f"the governed code hashes to {current[:16]}, which isn't the latest "
                          f"`{CODE_ROW}` row: register it before anything runs under it")
@@ -105,16 +140,18 @@ def propose(out, log=print):
     path = os.path.join(out, "proposals.jsonl")
     if os.path.exists(path):
         return load(path), json.load(open(os.path.join(out, "harvest.json")))
-    coq = pattern.Coq(notations=False)
+    coq = pattern.Coq(notations=False, extra=CFG["extra"])
     try:
-        entries = pattern.harvest(coq)
-        cands, counts = pattern.proposals(coq, entries, log)
+        entries = pattern.harvest(coq, CFG["sources"])
+        eqs = pattern.equations(coq, log=log) if CFG["equations"] else []
+        cands, counts = pattern.proposals(coq, entries + eqs, log, relation=CFG["relation"])
     finally:
         coq.close()
+    entries = entries + eqs
     text = json.dumps(entries)
-    harvest = {"modules": list(pattern.SOURCES), "entries": len(entries),
-               "sha256": hashlib.sha256(text.encode()).hexdigest(),
-               "skipped": counts, "proposer": pattern.PROPOSER}
+    harvest = {"modules": list(CFG["sources"]), "entries": len(entries), "equations": len(eqs),
+               "relation": CFG["relation"], "sha256": hashlib.sha256(text.encode()).hexdigest(),
+               "skipped": counts, "proposer": CFG["proposer"]}
     with open(os.path.join(out, "harvest-entries.json"), "w") as fh:
         fh.write(text)
     with open(os.path.join(out, "harvest.json"), "w") as fh:
@@ -140,7 +177,7 @@ def test_all(out, cands, log=print):
     if os.path.exists(path):
         return load(path)
     rows = distinct(cands)
-    coq = pattern.Coq(notations=True, deadline=TEST_DEADLINE)
+    coq = pattern.Coq(notations=True, deadline=TEST_DEADLINE, extra=CFG["extra"])
     try:
         for i, r in enumerate(rows):
             try:
@@ -151,7 +188,7 @@ def test_all(out, cands, log=print):
                 r.setdefault("statement", None)
                 r["test"] = {"status": "untestable", "reason": f"timed out: {e}"[:200]}
                 coq.close()
-                coq = pattern.Coq(notations=True, deadline=TEST_DEADLINE)
+                coq = pattern.Coq(notations=True, deadline=TEST_DEADLINE, extra=CFG["extra"])
             if r["statement"] is None and r["test"]["status"] != "ill_formed":
                 r["test"] = {"status": "ill_formed", "reason": "timed out elaborating"}
             if i % 25 == 0:
@@ -159,7 +196,8 @@ def test_all(out, cands, log=print):
     finally:
         coq.close()
     refuted = [r for r in rows if r["test"]["status"] == "refuted"]
-    verdicts = pattern.certify_disproofs([pattern.disproof(r, r["test"]) for r in refuted])
+    verdicts = pattern.certify_disproofs([pattern.disproof(r, r["test"]) for r in refuted],
+                                         extra=CFG["extra"])
     for r, v in zip(refuted, verdicts):
         r["test"]["certified"] = v
     dump(rows, path)
@@ -178,7 +216,7 @@ def prove(out, stmts, jobs, rounds=ROUNDS, steps=STEPS, log=print):
     from proventhru.explore import explore
     run_dir = os.path.join(out, "run")
     return explore(run_dir, rounds=rounds, per_round=len(stmts), step_budget=steps, jobs=jobs,
-                   prover=devgen.isort_tactics(), saturate=True, base=devgen.preamble(),
+                   prover=devgen.isort_tactics(), saturate=True, base=base_preamble(),
                    retry_open=True, statements=stmts, log=log, corpus_forms="all")
 
 
@@ -262,7 +300,7 @@ def search(stmts, corpus, out_dir, jobs, steps=STEPS, loaded=None):
     from proventhru.explore import CorpusRetrievalPolicy, preamble
     from proventhru.pipeline import run
     base = devgen.isort_tactics()
-    pre = preamble(loaded or corpus, devgen.preamble())
+    pre = preamble(loaded or corpus, base_preamble())
     half = steps // 2
     run(stmts, os.path.join(out_dir, "fixed"), pre, budget=None, step_budget=half, jobs=jobs,
         log=lambda *_: None, policy_factory=base, backend="coqtop")
@@ -303,7 +341,7 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
                 for r in rec.corpus(rec.load(p)):
                     gate.setdefault(r["statement"], r["gate"])
     golds = gold()
-    nocoq = pattern.Coq(notations=False)
+    nocoq = pattern.Coq(notations=False, extra=CFG["extra"])
     try:
         gold_prefix = {n: nocoq.term(s) for n, s, _ in golds}
     finally:
@@ -312,7 +350,7 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
     gold_syms = [symbols(p) - LOGICAL for p in gold_prefix.values()]
     vocab = VOCAB_OWN | set().union(*gold_syms)
     together = {frozenset((a, b)) for s in gold_syms for a in s for b in s if a != b}
-    base_pre = devgen.preamble()
+    base_pre = base_preamble()
 
     # per candidate: formalizable, refuted, novel, proved
     for r in rows:
@@ -386,6 +424,23 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
         r["connects"] = sorted(sorted(p) for p in {frozenset((a, b)) for a in mine for b in mine
                                                    if a != b and (a in VOCAB_OWN or b in VOCAB_OWN)}
                                - together)
+        r["weakening_of"] = []
+        if CFG["strict_connects"] and r["connects"]:
+            # run 2: a statement another proved conjecture or a gold statement
+            # gives in one step is a weakening, and connects nothing new
+            for o in proved:
+                if o is not r:
+                    oc = by_stmt[o["statement"]]
+                    if follows(preamble(with_deps(oc, corpus), base_pre), r["statement"],
+                               one_step_tactics(oc["name"], r["statement"], oc)):
+                        r["weakening_of"].append(oc["name"])
+            for n, st, _ in golds:
+                if r["key"] not in gold_keys[n] and follows(
+                        base_pre + "\n" + gold_block, r["statement"],
+                        one_step_tactics(n, r["statement"], {"name": n, "statement": st})):
+                    r["weakening_of"].append(f"gold:{n}")
+            if r["weakening_of"]:
+                r["connects"] = []
         r["significant"] = {"implies": bool(r["implies"]), "simplifies": bool(r["simplifies"]),
                             "used": bool(r["used_by"]), "connects": bool(r["connects"])}
 
@@ -424,6 +479,7 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
         "derived": dict(Counter(r["derived"] for r in rows if r["derived"])),
         "novel": len(novel), "novel_not_refuted": sum(not r["refuted"] for r in novel),
         "proved_novel": len(proved), "significant": len(signif),
+        "significant_not_gold": sum(not r["gold"] for r in signif),
         "significant_by": {k: sum(r["significant"][k] for r in proved)
                            for k in ("implies", "simplifies", "used", "connects")},
         "rates": {"formalizability": rate(len(formal), total),
@@ -460,11 +516,14 @@ def candidates_file(rows, dest):
 
 def report(out, summary, rows, reg, harvest, dest):
     proved = [r for r in rows if r["novel"] and r["proved"]]
-    L = ["# Pattern extractor, run 1: results", "",
+    L = [f"# Pattern extractor, run {RUN}: results", "",
          f"Run under `{SPEC}` (sha256 `{reg['spec'][:16]}…`), `{METRICS}` v1 "
          f"(`{reg['metrics'][:16]}…`) and the governed code `{CODE_ROW}` (`{reg['code'][:16]}…`).",
-         f"Proposer `{pattern.PROPOSER}`; harvest of {harvest['entries']} entries from "
-         f"{', '.join(harvest['modules'])} (sha256 `{harvest['sha256'][:16]}…`). "
+         f"Proposer `{CFG['proposer']}`; harvest of {harvest['entries']} entries from "
+         f"{', '.join(harvest['modules'])}"
+         + (f", with {harvest.get('equations', 0)} constructor equations and relation "
+            f"variables set to `{harvest.get('relation')}`" if harvest.get("equations") else "")
+         + f" (sha256 `{harvest['sha256'][:16]}…`). "
          "Generated by `tools/pattern_run.py` from the run directory; nothing here is "
          "edited by hand.", "",
          "## The metrics", "",
@@ -477,6 +536,7 @@ def report(out, summary, rows, reg, harvest, dest):
           f"| proved (novel) | {s['proved_novel']} | {rt['provability']} "
           f"({rt['provability_excluding_refuted']} of those not refuted) |",
           f"| **significant** | **{s['significant']}** | {rt['significance']} |",
+          f"| significant, not gold | {s['significant_not_gold']} | |",
           f"| inner use | {sum(r['inner'] for r in proved)} | {rt['inner_use']} |",
           f"| necessary novelty | {s['necessary_novelty']} | |", "",
           f"Significant by criterion: {s['significant_by']}.",
@@ -523,6 +583,8 @@ def report(out, summary, rows, reg, harvest, dest):
             L.append(f"  - used by: {', '.join(r['used_by'])}{' (inner)' if r['inner'] else ''}")
         if r["connects"]:
             L.append(f"  - connects: {', '.join('–'.join(p) for p in r['connects'])}")
+        if r.get("weakening_of"):
+            L.append(f"  - a weakening of {', '.join(r['weakening_of'])}: (d) doesn't count it")
     L += ["", "## Gold, searched without and with each conjecture", "",
           f"Baseline (the prover on the development's definitions alone): "
           f"{sum(s['baseline_gold'].values())} of {len(s['baseline_gold'])} proved.", "",
@@ -539,6 +601,7 @@ def report(out, summary, rows, reg, harvest, dest):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
+    ap.add_argument("--run", type=int, default=1, choices=sorted(RUNS))
     ap.add_argument("--out", required=True)
     ap.add_argument("--jobs", type=int, default=JOBS)
     ap.add_argument("--smoke", type=int, default=0,
@@ -546,6 +609,7 @@ def main(argv=None):
                          "one round at 60 steps, no preflight, the report kept in OUT. Its "
                          "outcomes aren't results")
     a = ap.parse_args(argv)
+    configure(a.run)
     rounds, steps = (1, 60) if a.smoke else (ROUNDS, STEPS)
     reg = {"spec": "smoke", "metrics": "smoke", "code": code_hash(HERE)} if a.smoke else preflight()
     os.makedirs(a.out, exist_ok=True)
@@ -558,14 +622,14 @@ def main(argv=None):
         stmts = stmts[:a.smoke]
     print(f"{len(rows)} distinct candidates; {len(stmts)} to the loop", flush=True)
     prove(a.out, stmts, a.jobs, rounds, steps)
-    line = (f"pattern run 1{' (smoke)' if a.smoke else ''}: {SPEC} sha256 {reg['spec']}; "
+    line = (f"pattern run {RUN}{' (smoke)' if a.smoke else ''}: {SPEC} sha256 {reg['spec']}; "
             f"{METRICS} sha256 {reg['metrics']}; governed code sha256 {reg['code']}; "
             f"harvest sha256 {harvest['sha256']}")
     annotate_all(os.path.join(a.out, "run"), line)
     summary = score(a.out, rows, a.jobs, rounds, steps)
     annotate_all(os.path.join(a.out, "significance"), line)
     dest = os.path.join(a.out, "report.md") if a.smoke else \
-        os.path.join(HERE, "results", "pattern-run-1.md")
+        os.path.join(HERE, "results", f"pattern-run-{RUN}.md")
     scored = load(os.path.join(a.out, "scored.jsonl"))
     candidates_file(scored, os.path.join(a.out, "candidates.jsonl") if a.smoke else CANDIDATES)
     report(a.out, summary, scored, reg, harvest, dest)

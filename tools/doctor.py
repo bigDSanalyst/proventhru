@@ -179,7 +179,7 @@ def _target2_pairs_code(repo):
 
 # Code rows in docs/frozen.md, and the module that owns each one's file list.
 CODE_ROWS = {"code:target-1": _target1_code, "code:pattern-run-1": _pattern_run1_code,
-             "code:target-2-pairs": _target2_pairs_code}
+             "code:pattern-run-2": _pattern_run1_code, "code:target-2-pairs": _target2_pairs_code}
 
 
 def check_frozen(repo):
@@ -192,7 +192,11 @@ def check_frozen(repo):
     bad, good, unseen = [], [], []
     shallow = git(repo, "rev-parse", "--is-shallow-repository") == "true"
     for doc, (version, digest, commit) in sorted(latest.items()):
-        if doc.startswith("code:"):
+        if doc.startswith("code:") and version == "closed":
+            # a finished run's code: its commit pins it, and the files may move on.
+            # Its tool refuses to run under a closed row.
+            pass
+        elif doc.startswith("code:"):
             # frozen code: a hash over the files its owner governs
             owner = CODE_ROWS.get(doc)
             if owner is None:

@@ -73,6 +73,20 @@ class TestStatements(unittest.TestCase):
         self.assertEqual(data, [("n", "nat"), ("l1", "list nat")])
         self.assertEqual(P.render(concl), "eq (insert n l1) l1")
 
+    def test_relation_variables_and_folding(self):
+        sorted_cons = ("forall [A : Type] [R : forall (_ : A) (_ : A), Prop] [a : A] [l : list A] "
+                       "(_ : Sorted R l) (_ : HdRel R a l), Sorted R (cons a l)")
+        with self.assertRaises(P.ParseError):
+            P.specialize(P.parse(sorted_cons))          # v1: a relation variable is higher-order
+        data, hyps, concl = P.specialize(P.parse(sorted_cons), relation="le")
+        self.assertEqual(data, [("a", "nat"), ("l", "list nat")])
+        self.assertEqual(P.render(concl), "Sorted le (cons a l)")
+        folded = P.fold(concl, "le")
+        self.assertEqual(folded, ("app", ("id", "Sorted@le"), (P.parse("cons a l"),)))
+        self.assertEqual(P.unfold(folded, "le"), concl)
+        self.assertEqual(P.render(P.unfold(P.subst(folded, {"Sorted@le": ("id", "sorted")}),
+                                           "le")), "sorted (cons a l)")
+
     def test_kind(self):
         def k(text, syms):
             return P.kind(P.specialize(P.parse(text)), syms)
@@ -116,6 +130,59 @@ class TestInCoq(unittest.TestCase):
         # every candidate mentions one of the development's symbols
         for c in got.values():
             self.assertTrue(set(P.OWN) & set(P.free(P.parse(c["prefix"]))), c["prefix"])
+
+    def test_constructor_equations(self):
+        coq = P.Coq(notations=False)
+        try:
+            eqs = dict(P.equations(coq))
+        finally:
+            coq.close()
+        self.assertEqual(eqs["length:cons@0"],
+                         "forall (a : nat) (t : list nat), eq (length (cons a t)) (S (length t))")
+        self.assertEqual(eqs["In:cons@1"],
+                         "forall (x0 : nat) (a : nat) (t : list nat), iff (In x0 (cons a t)) "
+                         "(or (eq a x0) (In x0 t))")
+        self.assertNotIn("app:cons@1", eqs)          # cbn makes no progress on app's second list
+        # the equation carries over: length's gives insert_length
+        got = self.cands([("length:cons@0", eqs["length:cons@0"])])
+        want = P.key(*P.specialize(P.parse(
+            "forall (a : nat) (l : list nat), eq (length (insert a l)) (S (length l))")))
+        self.assertIn(want, got)
+
+    def test_sorted_import_keeps_the_developments_sort(self):
+        # Coq.Sorting.Sorted defines the notation sort := Sorted; imported after
+        # the development, it would cover the development's sort
+        import sys
+        sys.path.insert(0, "tools")
+        import pattern_run as R
+        coq = P.Coq(notations=False, extra=("Require Import Sorted.",))
+        try:
+            text = coq.must("Check (forall l, length (sort l) = length l).")
+            self.assertNotIn("Sorted", text)
+        finally:
+            coq.close()
+        R.configure(2)
+        try:
+            pre = R.base_preamble()
+        finally:
+            R.configure(1)
+        self.assertLess(pre.index("Require Import Sorted."), pre.index("Fixpoint sort"))
+
+    def test_sorted_le_stands_for_sorted(self):
+        coq = P.Coq(notations=False, extra=("Require Import Sorted.",))
+        try:
+            text = coq.must("Search _ inside Sorted.")
+            entries = [(n, t) for n, t in (ln.split(": ", 1) for ln in text.splitlines()
+                                           if ln.startswith("Sorted_cons: "))]
+            out, _ = P.proposals(coq, entries, relation="le")
+        finally:
+            coq.close()
+        stmts = {c["prefix"] for c in out}
+        self.assertIn("forall (l1 : list nat) (n : nat), forall (_ : sorted l1), "
+                      "forall (_ : HdRel le n l1), sorted (insert n l1)", stmts)
+        # each symbol alone, too: Sorted le kept with cons as insert, and the reverse
+        self.assertIn("forall (l1 : list nat) (n : nat), forall (_ : sorted l1), "
+                      "forall (_ : HdRel le n l1), sorted (cons n l1)", stmts)
 
     def test_falsifier_space_sizes(self):
         for name, size in (("one_list", 5824), ("two_lists", 25600)):
