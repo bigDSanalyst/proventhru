@@ -33,3 +33,7 @@ A `code:` row is a hash over the files its owner lists, not a file: `code:target
 | `code:pattern-run-2` | closed | `26aa1ef72639ee51523bdf8ff59592d3fbf24acbad6aa63d82d74ce624ccf3af` | `70a0809` | 2026-11-01 |
 | `docs/pattern-run-3.md` | v1 | `ac0319c402f68f7e8f3119b522c010c6025ec7a8ee5445fdfe6c8972451568b6` | `f899cd2` | 2026-11-01 |
 | `code:pattern-run-3` | v1 | `f90d36b5ff6f3710de624f69a6d63d63025cf84f010ffbd21d9d41ad3f325944` | `f899cd2` | 2026-11-01 |
+| `code:pattern-run-3` | closed | `f90d36b5ff6f3710de624f69a6d63d63025cf84f010ffbd21d9d41ad3f325944` | `f899cd2` | 2026-11-01 |
+| `docs/pattern-run-4.md` | v1 | `1486df51fbe5855b5297c363ae6638597cb3e8cea947479cbbf1f65a774ad6e0` | `92fae1c` | 2026-11-01 |
+| `code:pattern-m1` | v1 | `95877dd1768c5ed1c91697e049031b7a8649f72ea8692f4edf21621ee6cde509` | `92fae1c` | 2026-11-01 |
+| `code:pattern-run-4` | v1 | `ee082dae5b1a01d6498a08b256efc2fdfc791cc3a71e3f9941ab404d2f325518` | `92fae1c` | 2026-11-01 |
