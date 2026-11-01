@@ -48,6 +48,16 @@ RUNS = {
         "proposer": pattern.PROPOSER_V2, "sources": pattern.SOURCES_V2,
         "relation": pattern.RELATION, "equations": True, "extra": ("Require Import Sorted.",),
         "strict_connects": True, "closed_novelty": True, "previous": 2},
+    # The model proposer (docs/pattern-run-4.md): its two seed batches are two runs,
+    # scored as run 3 scores, the proposals made in Colab by tools/pattern_m1.py.
+    4: {"spec": "docs/pattern-run-4.md", "row": "code:pattern-run-4",
+        "proposer": "pattern/model-m1-v1", "model_batch": "A", "sources": (), "relation": None,
+        "equations": False, "extra": ("Require Import Sorted.",), "strict_connects": True,
+        "closed_novelty": True, "previous": None, "compare": 3},
+    5: {"spec": "docs/pattern-run-4.md", "row": "code:pattern-run-4",
+        "proposer": "pattern/model-m1-v1", "model_batch": "B", "sources": (), "relation": None,
+        "equations": False, "extra": ("Require Import Sorted.",), "strict_connects": True,
+        "closed_novelty": True, "previous": 4, "compare": 3},
 }
 # Run 3's novelty: a statement one constructor step closes is present in the
 # development (its own inductives' constructors) or the library (theirs).
@@ -143,10 +153,37 @@ def dump(rows, path):
 
 # ---------------------------------------------------------------- 1, 2
 
-def propose(out, log=print):
+def propose_model(out, proposals, log=print):
+    """A model run's candidates: its batch's rows of the proposals file Colab wrote."""
+    with open(proposals, "rb") as fh:
+        raw = fh.read()
+    rows = [json.loads(ln) for ln in raw.decode().splitlines() if ln.strip()]
+    mine = [r for r in rows if r.get("batch") == CFG["model_batch"]]
+    if not mine:
+        raise SystemExit(f"{proposals} has no rows of batch {CFG['model_batch']}")
+    coq = pattern.Coq(notations=False, extra=CFG["extra"])
+    try:
+        cands, counts = pattern.from_statements(coq, mine, log)
+    finally:
+        coq.close()
+    harvest = {"proposer": CFG["proposer"], "batch": CFG["model_batch"], "entries": len(mine),
+               "modules": [], "sha256": hashlib.sha256(raw).hexdigest(), "skipped": counts,
+               "prompt_sha256": sorted({r.get("prompt_sha256") for r in mine}),
+               "served_model": sorted({r.get("served_model") for r in mine if "failure" not in r})}
+    with open(os.path.join(out, "harvest.json"), "w") as fh:
+        json.dump(harvest, fh, indent=1)
+    dump(cands, os.path.join(out, "proposals.jsonl"))
+    return cands, harvest
+
+
+def propose(out, log=print, proposals=None):
     path = os.path.join(out, "proposals.jsonl")
     if os.path.exists(path):
         return load(path), json.load(open(os.path.join(out, "harvest.json")))
+    if CFG.get("model_batch"):
+        if not proposals:
+            raise SystemExit("a model run needs --proposals: the file tools/pattern_m1.py wrote")
+        return propose_model(out, proposals, log)
     coq = pattern.Coq(notations=False, extra=CFG["extra"])
     try:
         entries = pattern.harvest(coq, CFG["sources"])
@@ -383,6 +420,15 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
                     r["present_by"] = "one constructor step: " + tac
             r["novel"] = r["present_by"] is None
     proved = [r for r in rows if r["novel"] and r["proved"]]
+    compared = {}
+    if CFG.get("compare"):
+        # what the model proposed that pattern transfer did too, and what it proved that
+        # pattern transfer didn't
+        old_rows = load(os.path.join(HERE, "results",
+                                     f"pattern-run-{CFG['compare']}-candidates.jsonl"))
+        compared = {r["prefix"]: r for r in old_rows}
+        for r in rows:
+            r["in_compared_run"] = r["prefix"] in compared
 
     # (a) implies a development statement; gold overlap up to derivation
     gold_block = "\n".join(b for _, _, b in golds)
@@ -499,6 +545,9 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
         "proved_novel": len(proved), "significant": len(signif),
         "present_in_development": sum(bool(r.get("present_by")) for r in rows),
         "gold_proved": sorted({g for r in rows if r["proved"] for g in r["gold"]}),
+        "in_compared_run": sum(bool(r.get("in_compared_run")) for r in rows),
+        "proved_not_compared": sorted(r["statement"] for r in proved
+                                      if not (compared.get(r["prefix"]) or {}).get("proved")),
         "significant_not_gold": sum(not r["gold"] for r in signif),
         "significant_by": {k: sum(r["significant"][k] for r in proved)
                            for k in ("implies", "simplifies", "used", "connects")},
@@ -530,7 +579,8 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
 def candidates_file(rows, dest):
     keep = ("statement", "prefix", "sources", "kinds", "test", "formalizable", "gate", "derived",
             "novel", "refuted", "proved", "gold", "implies", "equivalent", "simplifies",
-            "used_by", "inner", "connects", "significant")
+            "used_by", "inner", "connects", "significant", "present_by", "weakening_of",
+            "why", "in_compared_run")
     dump([{k: r[k] for k in keep if k in r} for r in rows], dest)
 
 
@@ -547,6 +597,16 @@ def stopping(s, rows):
     previous run counted under this run's novelty, and the residue's buckets
     against the previous run's."""
     prev = CFG["previous"]
+    if prev is None:
+        return ["## The stopping rule", "",
+                f"- Statements present in the development (a held-out lemma, or one "
+                f"constructor step), so not novel here: {s['present_in_development']}. Held-out "
+                f"lemmas proved: {', '.join(s['gold_proved']) or 'none'}.",
+                f"- Significant novel conjectures: {s['significant']}. This is the first of "
+                f"`{CFG['proposer']}`'s two registered runs; the second reads the rule.",
+                f"- Proposed by `pattern/analogy-v2` too (run {CFG['compare']}): "
+                f"{s.get('in_compared_run', 0)} of {s['proposed']}; proved here and not "
+                f"there: {len(s.get('proved_not_compared', []))}.", ""]
     old = load(os.path.join(HERE, "results", f"pattern-run-{prev}-candidates.jsonl"))
     base_pre = base_preamble()
     old_sig = [r for r in old if r.get("novel") and r.get("proved")
@@ -575,11 +635,16 @@ def report(out, summary, rows, reg, harvest, dest):
     L = [f"# Pattern extractor, run {RUN}: results", "",
          f"Run under `{SPEC}` (sha256 `{reg['spec'][:16]}…`), `{METRICS}` v1 "
          f"(`{reg['metrics'][:16]}…`) and the governed code `{CODE_ROW}` (`{reg['code'][:16]}…`).",
-         f"Proposer `{CFG['proposer']}`; harvest of {harvest['entries']} entries from "
-         f"{', '.join(harvest['modules'])}"
-         + (f", with {harvest.get('equations', 0)} constructor equations and relation "
-            f"variables set to `{harvest.get('relation')}`" if harvest.get("equations") else "")
-         + f" (sha256 `{harvest['sha256'][:16]}…`). "
+         (f"Proposer `{CFG['proposer']}`, batch {harvest['batch']}: {harvest['entries']} "
+          f"model rows (proposals file sha256 `{harvest['sha256'][:16]}…`; prompt "
+          f"{', '.join(p[:16] + '…' for p in harvest['prompt_sha256'] if p)}; served as "
+          f"{', '.join(map(str, harvest['served_model']))}). " if CFG.get("model_batch") else
+          f"Proposer `{CFG['proposer']}`; harvest of {harvest['entries']} entries from "
+          f"{', '.join(harvest['modules'])}"
+          + (f", with {harvest.get('equations', 0)} constructor equations and relation "
+             f"variables set to `{harvest.get('relation')}`" if harvest.get("equations") else "")
+          + f" (sha256 `{harvest['sha256'][:16]}…`). ")
+         +
          "Generated by `tools/pattern_run.py` from the run directory; nothing here is "
          "edited by hand.", "",
          "## The metrics", "",
@@ -662,6 +727,8 @@ def main(argv=None):
     ap.add_argument("--run", type=int, default=1, choices=sorted(RUNS))
     ap.add_argument("--out", required=True)
     ap.add_argument("--jobs", type=int, default=JOBS)
+    ap.add_argument("--proposals", default=None,
+                    help="a model run's proposals file (tools/pattern_m1.py's output)")
     ap.add_argument("--smoke", type=int, default=0,
                     help="check the code paths: the first N statements sent to the loop, "
                          "one round at 60 steps, no preflight, the report kept in OUT. Its "
@@ -671,7 +738,7 @@ def main(argv=None):
     rounds, steps = (1, 60) if a.smoke else (ROUNDS, STEPS)
     reg = {"spec": "smoke", "metrics": "smoke", "code": code_hash(HERE)} if a.smoke else preflight()
     os.makedirs(a.out, exist_ok=True)
-    cands, harvest = propose(a.out)
+    cands, harvest = propose(a.out, proposals=a.proposals)
     rows = test_all(a.out, cands)
     stmts = to_prove(rows)
     if a.smoke:

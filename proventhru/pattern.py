@@ -29,6 +29,7 @@ import subprocess
 import tempfile
 
 from .coqtop import Coqtop
+from .session import check_statement
 
 HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pilots", "isort")
 SOURCES = ("List", "Permutation")        # the library modules patterns are read from
@@ -575,6 +576,49 @@ def equations(coq, modules=EQUATION_MODULES, log=lambda *_: None):
     return out
 
 
+def from_statements(coq, rows, log=lambda *_: None):
+    """(candidates, counts) from statements a model wrote: each is elaborated
+    and printed by Coq without notations, then read like a library theorem.
+    One that doesn't elaborate stays a candidate, to be counted as not
+    formalizable; one outside the first-order fragment stays one, untested."""
+    out, counts = [], {}
+
+    def count(reason):
+        counts[reason] = counts.get(reason, 0) + 1
+
+    for r in rows:
+        if "failure" in r:
+            count("no usable answer")
+            continue
+        text = r["statement"].strip().rstrip(".")
+        base = {"source": f"m1:{r['kind']}:{r['seed']}:{r['index']}", "substitution": {},
+                "kind": r["kind"], "batch": r["batch"], "why": r.get("why", "")}
+        try:
+            check_statement(text)
+        except ValueError:
+            count("not one term")
+            out.append(dict(base, data=None, prefix=text, key="raw:" + text))
+            continue
+        printed, err = coq.run(f"Check ({text}).")
+        term, _, ty = printed.partition("\n     : ")
+        if err or ty.strip() != "Prop":
+            count("doesn't elaborate as a Prop")
+            out.append(dict(base, data=None, prefix=text, key="raw:" + text))
+            continue
+        prefix = term.strip()
+        try:
+            d, h, c = rename(*specialize(parse(prefix)))
+        except ParseError as e:
+            count("outside the first-order fragment")
+            out.append(dict(base, data=None, prefix=prefix, key="raw:" + prefix,
+                            untestable=str(e)[:120]))
+            continue
+        out.append(dict(base, data=d, hyps=[render(x) for x in h], concl=render(c),
+                        prefix=render(statement(d, h, c)), key=key(d, h, c)))
+    log(f"{len(rows)} model rows: {len(out)} candidates; {counts}")
+    return out, counts
+
+
 # ---------------------------------------------------------------- testing
 
 def conj(hs):
@@ -631,6 +675,9 @@ def test(coq, c):
     decided at every input of its space (ISortDec.v), the first failing input
     kept as a counterexample, and whether its premises held anywhere. coq
     must print with notations (the counterexample is read from Coq's output)."""
+    if c.get("data") is None:
+        return {"status": "untestable",
+                "reason": c.get("untestable") or "outside the first-order fragment"}
     t = test_terms(c)
     if t is None:
         return {"status": "untestable", "reason": "more variables than the test space binds"}
