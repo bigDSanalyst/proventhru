@@ -224,7 +224,11 @@ def follows(pre, stmt, tactics, timeout=2):
     from proventhru.session import open_session
     try:
         s = open_session(pre, stmt, "coqtop")
-    except Exception:           # doesn't elaborate there, or the preamble doesn't load
+    except ValueError as e:
+        # a statement that doesn't elaborate there doesn't follow; a preamble
+        # that doesn't load is a bug in the check, never a "no"
+        if "preamble does not load" in str(e):
+            raise RuntimeError(f"the check's preamble doesn't load: {e}") from e
         return None
     try:
         return _first_closing(s, tactics, timeout)
@@ -238,13 +242,27 @@ def symbols(stmt_prefix):
     return {s for s in pattern.free(pattern.statement([], hyps, concl)) if s not in bound}
 
 
-def search(stmts, corpus, out_dir, jobs, steps=STEPS):
-    """The loop's two provers on stmts, with corpus as the only corpus lemmas:
-    {statement: (proved, steps, proof)}."""
+def with_deps(c, corpus):
+    """c and the corpus lemmas its proof cites, transitively, in corpus order:
+    what a preamble needs for c's own proof to compile."""
+    by_name = {x["name"]: x for x in corpus}
+    need, todo = set(), [c["name"]]
+    while todo:
+        n = todo.pop()
+        if n not in need:
+            need.add(n)
+            todo += by_name[n]["cites"]
+    return [x for x in corpus if x["name"] in need]
+
+
+def search(stmts, corpus, out_dir, jobs, steps=STEPS, loaded=None):
+    """The loop's two provers on stmts, offered corpus as the only corpus
+    lemmas: {statement: (proved, steps, proof)}. loaded is what the preamble
+    holds, when it needs more than corpus to compile (the lemmas they cite)."""
     from proventhru.explore import CorpusRetrievalPolicy, preamble
     from proventhru.pipeline import run
     base = devgen.isort_tactics()
-    pre = preamble(corpus, devgen.preamble())
+    pre = preamble(loaded or corpus, devgen.preamble())
     half = steps // 2
     run(stmts, os.path.join(out_dir, "fixed"), pre, budget=None, step_budget=half, jobs=jobs,
         log=lambda *_: None, policy_factory=base, backend="coqtop")
@@ -314,7 +332,7 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
     gold_block = "\n".join(b for _, _, b in golds)
     for r in proved:
         c = by_stmt[r["statement"]]
-        pre = preamble([c], base_pre)
+        pre = preamble(with_deps(c, corpus), base_pre)
         r["implies"], r["equivalent"] = [], []
         for n, s, _ in golds:
             if r["key"] in gold_keys[n]:
@@ -333,7 +351,8 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
     for r in proved:
         c = by_stmt[r["statement"]]
         targets = [s for n, s, _ in golds if r["key"] not in gold_keys[n]]
-        res = search(targets, [c], os.path.join(sig, c["name"]), jobs, steps)
+        res = search(targets, [c], os.path.join(sig, c["name"]), jobs, steps,
+                     loaded=with_deps(c, corpus))
         r["simplifies"], r["gold_proofs"] = [], {}
         for n, s, _ in golds:
             if s not in res or not res[s][0]:
