@@ -30,3 +30,6 @@ A `code:` row is a hash over the files its owner lists, not a file: `code:target
 | `code:pattern-run-1` | closed | `d69317c6039673f620a3b19941b886bb82781cc6b6e7ec4d1a9fecdf20071b8c` | `3e84939` | 2026-11-01 |
 | `docs/pattern-run-2.md` | v1 | `e1657026f646446193aae41fab826f8656bc0e03c94156438ddb594cf03558d9` | `70a0809` | 2026-11-01 |
 | `code:pattern-run-2` | v1 | `26aa1ef72639ee51523bdf8ff59592d3fbf24acbad6aa63d82d74ce624ccf3af` | `70a0809` | 2026-11-01 |
+| `code:pattern-run-2` | closed | `26aa1ef72639ee51523bdf8ff59592d3fbf24acbad6aa63d82d74ce624ccf3af` | `70a0809` | 2026-11-01 |
+| `docs/pattern-run-3.md` | v1 | `ac0319c402f68f7e8f3119b522c010c6025ec7a8ee5445fdfe6c8972451568b6` | `f899cd2` | 2026-11-01 |
+| `code:pattern-run-3` | v1 | `f90d36b5ff6f3710de624f69a6d63d63025cf84f010ffbd21d9d41ad3f325944` | `f899cd2` | 2026-11-01 |
