@@ -172,8 +172,14 @@ def _pattern_run1_code(repo):
     return code_hash(str(repo))
 
 
+def _target2_pairs_code(repo):
+    from dpo_pairs import code_hash
+    return code_hash(str(repo))
+
+
 # Code rows in docs/frozen.md, and the module that owns each one's file list.
-CODE_ROWS = {"code:target-1": _target1_code, "code:pattern-run-1": _pattern_run1_code}
+CODE_ROWS = {"code:target-1": _target1_code, "code:pattern-run-1": _pattern_run1_code,
+             "code:target-2-pairs": _target2_pairs_code}
 
 
 def check_frozen(repo):

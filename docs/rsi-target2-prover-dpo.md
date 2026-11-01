@@ -1,9 +1,11 @@
 # RSI target 2: does the prover improve from its own output? (DPO)
 
 Written: 2026-10-10. Edited 2026-10-11: the adversarial review's edit plan of 2026-10-10 is
-applied, since target 1 read (i) and this target now runs.
-Status: **draft, not frozen.**
-- It's frozen after target 1 reports and before any model call on P or `test`.
+applied, since target 1 read (i) and this target now runs. The owner's decisions are of
+2026-11-01 (the last section).
+Status: in force from the commit that removed its draft line.
+- Its hash is in `docs/frozen.md`, with the pair-count code's `code:target-2-pairs` row.
+- It was frozen after target 1 reported and before any model call on P or `test`.
 - Its numbers go into the next `PROTOCOL.md` amendment: v6, unless another amendment freezes
   first. `docs/model-experiment-spec.md` also names v6.
 - No A100 time was spent before target 1 reported. After it, the only A100 time before the
@@ -168,12 +170,9 @@ between iterations: the same pipeline runs on the new model's own trees.
 - θ = max(7, 1 + the test statements the uncached iteration-0 C run proves and the cached one
   doesn't). 7 is one more than v5's largest one-sided discordance between C on `test` and C on
   `test_renamed`.
-- **The rule (OWNER'S DECISION PENDING: gains, as pinned, or net):**
-  - gains: the loop stops after k if k proves fewer than θ statements of this union that
-    k − 1 didn't;
-  - net: it stops if k's net gain over k − 1 is below θ.
-
-  Whichever rule is chosen, net gain is reported with it.
+- **The rule (the owner's decision): net.** The loop stops after k if k's net gain over
+  k − 1 (statements of this union that k proves and k − 1 didn't, minus the reverse) is below
+  θ. The gains are reported with it.
 - A budget stop is reported as incomplete, never as a plateau.
 
 ## Outcomes
@@ -221,8 +220,9 @@ Readings, first that applies:
 
 ## Cost, measured before freezing the amendment
 
-- **The budget:** U = 97 A100 units, less the 30 that `docs/model-experiment-spec.md` reserves,
-  unless that spec is withdrawn in a dated commit (OWNER'S DECISION PENDING: U = 67 or 97).
+- **The budget (the owner's decision):** U = 67 A100 units. That's the 97 left, less the 30
+  that `docs/model-experiment-spec.md` reserves, which it keeps.
+- **The smoke test** is capped at U_smoke = 15 units.
 - **What's spent:**
   - per iteration: the P search (C and D), the fine-tune, and held-out C, D and C on
     `test_renamed` (plus D+R3);
@@ -263,14 +263,15 @@ Mapping, fixed before target 1 reported:
   policy as the limit.
 - After target 1, the pattern extractor is the main line of work. This target runs behind it.
 
-## Decisions for the owner before freezing
+## The owner's decisions (2026-11-01)
 
-1. **D's retrieval:** v1 as registered, so iteration 0 can reproduce 26, with v2 only in the
-   D+R3 arm (recommended); or v2 throughout, as a new baseline.
-2. **The A100 budget:** does `docs/model-experiment-spec.md` keep its 30-unit reservation
-   (U = 67) or not (U = 97)? And what is U_smoke?
-3. **The stop rule:** gains, as pinned, or net. A gains-only stop at 7 can end the loop after a
-   significant 6–0 iteration, and can continue after +7/−9.
-4. **Two readings of the pins to confirm:**
+1. **D's retrieval is v1, as registered,** so iteration 0 can reproduce 26. v2 is used only in
+   the D+R3 arm.
+2. **The A100 budget** is U = 67, keeping `docs/model-experiment-spec.md`'s 30-unit
+   reservation, and U_smoke = 15.
+3. **The stop rule** is net, not gains: a gains-only stop could continue after a +7/−9
+   iteration.
+4. **The readings of the pins** are as this file states them:
    - "attempted and failed" means refused by Coq, not timeouts or guard refusals;
-   - expert iteration also follows when iteration 1 shows no gain, not only after a plateau.
+   - expert iteration follows whenever DPO doesn't improve M1, including when iteration 1
+     shows no gain, not only after a plateau.
