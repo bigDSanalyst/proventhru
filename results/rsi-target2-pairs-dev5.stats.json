@@ -1,0 +1,46 @@
+{
+ "pairs": 82,
+ "per_proved_tree": 4.316,
+ "frontier": {
+  "C": {
+   "trees": 29,
+   "set aside: later episodes of a statement (a rerun)": 29,
+   "proved": 7,
+   "steps above the median": 3,
+   "an on-path tactic from a re-ask": 3,
+   "excluded: proved in 10 steps or fewer": 2,
+   "frontier": 4
+  },
+  "D": {
+   "trees": 29,
+   "proved": 12,
+   "proved with retrieval, not without": 6,
+   "steps above the median": 6,
+   "an on-path tactic from a re-ask": 4,
+   "frontier": 11
+  }
+ },
+ "counts": {
+  "C: beyond 3 per state": 11,
+  "C: dropped: f already in P_j": 20,
+  "C: f not used: ok": 111,
+  "C: on-path states": 24,
+  "C: pairs (i < j)": 9,
+  "C: pairs (i > j)": 39,
+  "C: the same triple earlier in this condition": 12,
+  "D: beyond 3 per state": 1,
+  "D: dropped: f already in P_j": 21,
+  "D: f not used: a retrieval lemma": 582,
+  "D: f not used: ok": 112,
+  "D: no pair: t* from retrieval": 14,
+  "D: on-path states": 44,
+  "D: pairs (i < j)": 10,
+  "D: pairs (i > j)": 24,
+  "D: the same triple earlier in this condition": 10,
+  "D: the same triple in another condition": 9
+ },
+ "prompt_sha256": "e26d4a7732dc48875af2cd566141a41ae7a939bb66ffd0bb0d794caba54f1ee4",
+ "cache_entries": 63415,
+ "doc_sha256": "0218d1ab8d4aa486111bf7efa50dca26d5f7f1da6da360333c0489c3e60f4d89",
+ "code_sha256": "5fa9de698bc901b2fdf22c9e2ae55fad88200572e5f2aaaf181db8e5d734288e"
+}

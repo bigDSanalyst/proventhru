@@ -5,8 +5,31 @@ its steps run. Deviations are listed below as they happen, each with its reason.
 
 ## Step 2: the pair count on dev round 5
 
-Pending: T2-a again, under `code:target-2-pairs` v2. The first count (v1) read condition C
-twice, and it isn't used (deviation 1).
+T2-a, under `code:target-2-pairs` v2, run in Colab on 2026-11-01 from main at `34ddc94`. The
+first count (v1) read condition C twice, and it isn't used (deviation 1).
+
+- **82 pairs from 19 proved trees: 4.316 per proved tree.**
+  - C (M1 alone): 29 trees (the rerun's 29 set aside), 7 proved, 4 on the frontier. 48 pairs:
+    9 i < j, 39 i > j.
+  - D (with retrieval): 29 trees, 12 proved, 11 on the frontier. 34 pairs: 10 i < j, 24 i > j.
+  - The 82 pairs come from 9 of the 29 dev statements.
+- **The files.**
+  - Stats: `results/rsi-target2-pairs-dev5.stats.json` (sha256 `cdb40249fce300b5…`), as Colab
+    wrote it to Drive (`runs/t2-pairs-dev5.stats.json`).
+  - Pairs: Drive `runs/t2-pairs-dev5.jsonl`, 627,985 bytes, sha256
+    `53eada391ce8f1a7c1d1be9b36c848084c5ccea7bde724cbf961f59d6d3f21bd`.
+- **N_min = 500 is reachable, so the target runs in this form.**
+  - P is the 29 dev statements plus the first N statements of `examples/ranker_rest.txt`
+    (200 ≤ N ≤ 625).
+  - M1's proof rate on the new statements isn't measured until iteration 0 searches P. At
+    dev's rate (19 proofs in 58 searches), 4.316 per proved tree projects to 82/29 = 2.83
+    pairs per statement of P: 648 pairs at N = 200, and 1,849 at N = 625. So N_lo = 200.
+  - Dev was the tuning set, so its rate may run high. 500 pairs need about 116 proofs: 25% of
+    P's searches at N = 200, or 9% at N = 625 (dev: 33%).
+  - What happens if iteration 0's real count falls short of N_min is for the amendment (step
+    4) to state.
+- **Next in the order:** step 3, the smoke test on the 29 dev statements, capped at U_smoke =
+  15 A100 units.
 
 ## Deviations
 
