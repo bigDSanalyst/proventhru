@@ -167,7 +167,8 @@ Every candidate, with its test, gate and scores: `results/pattern-run-4-candidat
     10 smoke calls and one search on dev statements, and a cache replay of dev C.
   - None of them wrote to P-1's cache (`cache/pattern-m1.jsonl`), and nothing from them is
     used here. Cell 7's effect on target 2 is in `results/rsi-target2.md`.
-  - The session's A100 use, against the cap of 5 units: UNITS.
+  - The session's A100 use against the cap of 5 units: not reported by the owner as of this
+    write-up.
   - The proposals reached this container through the Drive connector, because the network
     blocks Drive. Their size and sha256 are the harvest's (188,681 bytes,
     `1bcf038bd0cd602d…`), and the file is committed as `results/pattern-m1-proposals.jsonl`.
