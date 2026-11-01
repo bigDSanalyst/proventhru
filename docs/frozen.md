@@ -27,6 +27,7 @@ A `code:` row is a hash over the files its owner lists, not a file: `code:target
 | `code:pattern-run-1` | v2 | `d69317c6039673f620a3b19941b886bb82781cc6b6e7ec4d1a9fecdf20071b8c` | `3e84939` | 2026-11-01 |
 | `docs/rsi-target2-prover-dpo.md` | v1 | `0218d1ab8d4aa486111bf7efa50dca26d5f7f1da6da360333c0489c3e60f4d89` | `c5f7e8e` | 2026-11-01 |
 | `code:target-2-pairs` | v1 | `75769d9224e45220c2a39283b7f50badc902e68d7cffe78aa1a6f6eb3fbe94d5` | `c5f7e8e` | 2026-11-01 |
+| `code:target-2-pairs` | v2 | `5fa9de698bc901b2fdf22c9e2ae55fad88200572e5f2aaaf181db8e5d734288e` | `5c9a941` | 2026-11-01 |
 | `code:pattern-run-1` | closed | `d69317c6039673f620a3b19941b886bb82781cc6b6e7ec4d1a9fecdf20071b8c` | `3e84939` | 2026-11-01 |
 | `docs/pattern-run-2.md` | v1 | `e1657026f646446193aae41fab826f8656bc0e03c94156438ddb594cf03558d9` | `70a0809` | 2026-11-01 |
 | `code:pattern-run-2` | v1 | `26aa1ef72639ee51523bdf8ff59592d3fbf24acbad6aa63d82d74ce624ccf3af` | `70a0809` | 2026-11-01 |
