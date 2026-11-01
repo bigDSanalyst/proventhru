@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import statistics
 import sys
 from collections import Counter
@@ -29,6 +30,43 @@ from proventhru.policy_openai import OpenAICompatPolicy, extract_json, prompt_sh
 
 MIN_STEPS = 10          # a tree proved in this many steps or fewer is excluded
 PER_STATE = 3           # pairs per state, the first in record order
+HERE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DOC, CODE_ROW = "docs/rsi-target2-prover-dpo.md", "code:target-2-pairs"
+# What the count's result depends on: the rule, and the code that rebuilds a
+# prompt (the view, the policy's request body, the schema and vocabulary, canon).
+GOVERNED = [
+    "proventhru/coqtop.py", "proventhru/goals.py", "proventhru/policy_claude.py",
+    "proventhru/policy_openai.py", "proventhru/record.py", "proventhru/session.py",
+    "proventhru/view.py", "tools/dpo_pairs.py",
+]
+
+
+def code_hash(repo, paths=GOVERNED):
+    """sha256 over the governed files' paths and contents, in order."""
+    h = hashlib.sha256()
+    for p in paths:
+        with open(os.path.join(repo, p), "rb") as fh:
+            h.update(f"{p} {hashlib.sha256(fh.read()).hexdigest()}\n".encode())
+    return h.hexdigest()
+
+
+def preflight(repo=HERE):
+    """The count runs only under the frozen doc and the registered code."""
+    with open(os.path.join(repo, "docs", "frozen.md")) as fh:
+        rows = re.findall(r"^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*`([0-9a-f]{64})`\s*\|",
+                          fh.read(), re.M)
+    with open(os.path.join(repo, DOC), "rb") as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    docs = [r for r in rows if r[0] == DOC]
+    if not docs or docs[-1][2] != digest:
+        raise SystemExit(f"{DOC} isn't frozen at its current hash ({digest[:16]}): the count "
+                         "runs only after the freeze")
+    codes = [r for r in rows if r[0] == CODE_ROW]
+    current = code_hash(repo)
+    if not codes or codes[-1][2] != current:
+        raise SystemExit(f"the pair-count code hashes to {current[:16]}, which isn't the latest "
+                         f"`{CODE_ROW}` row")
+    return digest, current
 
 
 class Tree:
@@ -315,6 +353,7 @@ def main(argv=None):
     ap.add_argument("--stats", required=True)
     ap.add_argument("--no-root", action="store_true", help="don't open Coq for root states")
     a = ap.parse_args(argv)
+    doc_sha, code_sha = preflight()
     runs = [r.split("=", 1) for r in a.run]
     cache = {}
     with open(a.cache) as fh:
@@ -341,7 +380,8 @@ def main(argv=None):
     proved = sum(v.get("proved", 0) for v in summary.values())
     stats = {"pairs": len(out), "per_proved_tree": round(len(out) / proved, 3) if proved else None,
              "frontier": summary, "counts": dict(sorted(counts.items())),
-             "prompt_sha256": prompt_sha256(), "cache_entries": len(cache)}
+             "prompt_sha256": prompt_sha256(), "cache_entries": len(cache),
+             "doc_sha256": doc_sha, "code_sha256": code_sha}
     with open(a.stats, "w") as fh:
         json.dump(stats, fh, indent=1)
     print(json.dumps(stats, indent=1))
