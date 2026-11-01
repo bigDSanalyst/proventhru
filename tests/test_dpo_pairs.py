@@ -91,7 +91,7 @@ class TestPairRule(unittest.TestCase):
             with open(self.cache) as fh:
                 cache = {json.loads(ln)["key"]: json.loads(ln) for ln in fh}
             counts = Counter()
-            out = self.dp.pairs("C", self.trees, chosen, cache, self.dp.Prompts(), set(), counts)
+            out = self.dp.pairs("C", self.trees, chosen, cache, self.dp.Prompts(), {}, counts)
         finally:
             self.dp.MIN_STEPS = old
         root = [p for p in out if p["path"] == []]
@@ -110,6 +110,38 @@ class TestPairRule(unittest.TestCase):
         self.assertEqual(counts["C: beyond 3 per state"], 1)
         # the later states' t* came from their only ask: no other ask, no pair
         self.assertFalse([p for p in out if p["path"]])
+
+    def test_a_rerun_into_the_same_directory_is_set_aside(self):
+        """The notebook's dev cell, run again after round 5, appended a replay of
+        C's episodes to round 5's directory. Each statement keeps its first tree,
+        and the replay adds no pairs past 3 per state."""
+        from collections import Counter
+        from proventhru.pipeline import run
+        from proventhru.policy_openai import OpenAICompatPolicy
+        d = os.path.join(self.dir, "C-rerun")
+        shutil.copytree(os.path.join(self.dir, "C"), d)
+        pol = OpenAICompatPolicy(PRE, "org/m", "http://localhost:8000/v1", key_env=None,
+                                 response_format="json_schema", cache=self.cache,
+                                 transport=Model())
+        run([STATEMENT], d, PRE, policy=pol, budget=None, step_budget=60,
+            log=lambda *_: None, backend="coqtop", resume=False)
+        eps = [e for e in self.dp.rec.load(os.path.join(d, "records.jsonl"))
+               if e["kind"] == "episode"]
+        self.assertEqual(len(eps), 2)
+        aside = Counter()
+        trees = self.dp.load(d, aside)
+        self.assertEqual([t.ep["episode"] for t in trees], [self.trees[0].ep["episode"]])
+        self.assertEqual(aside, {"later episodes of a statement (a rerun)": 1})
+        old = self.dp.MIN_STEPS
+        self.dp.MIN_STEPS = 0
+        try:
+            chosen, _ = self.dp.frontier(trees)
+            with open(self.cache) as fh:
+                cache = {json.loads(ln)["key"]: json.loads(ln) for ln in fh}
+            out = self.dp.pairs("C", trees, chosen, cache, self.dp.Prompts(), {}, Counter())
+        finally:
+            self.dp.MIN_STEPS = old
+        self.assertEqual(len([p for p in out if p["path"] == []]), 3)
 
     def test_a_changed_record_doesnt_verify(self):
         prompts = self.dp.Prompts()

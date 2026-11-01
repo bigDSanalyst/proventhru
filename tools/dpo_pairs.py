@@ -84,18 +84,33 @@ class Tree:
         return (self.outcome or {}).get("stats", {}).get("steps") or len(self.steps)
 
 
-def load(run_dir):
-    trees = {}
+def load(run_dir, aside=None):
+    """One tree per statement: the first of its episodes that ended (an outcome
+    with a standing, and no error). A rerun into the same directory appends later
+    episodes of the same statements (the notebook's dev cell, run again after
+    round 5, does): they're counted in aside and not used, so each statement's
+    tree is its round-5 one, and C isn't read twice."""
+    eps = {}
     for e in rec.load(os.path.join(run_dir, "records.jsonl")):
         d = dict(e["data"], seq=e["seq"])
         if e["kind"] == "episode":
-            trees[d["episode"]] = Tree(d)
+            eps[d["episode"]] = Tree(d)
         elif e["kind"] == "proposal":
-            trees[d["episode"]].proposals.append(d)
+            eps[d["episode"]].proposals.append(d)
         elif e["kind"] == "step":
-            trees[d["episode"]].steps.append(d)
+            eps[d["episode"]].steps.append(d)
         elif e["kind"] == "outcome":
-            trees[d["episode"]].outcome = d
+            eps[d["episode"]].outcome = d
+    trees, aside = {}, Counter() if aside is None else aside
+    for t in eps.values():                      # in record order
+        stats = (t.outcome or {}).get("stats") or {}
+        if (not t.outcome or t.outcome.get("standing") is None
+                or "error" in stats or "incomplete" in stats):
+            aside["episodes cut short"] += 1
+        elif t.ep["statement"] in trees:
+            aside["later episodes of a statement (a rerun)"] += 1
+        else:
+            trees[t.ep["statement"]] = t
     return list(trees.values())
 
 
@@ -306,7 +321,9 @@ def pairs(label, trees, chosen_trees, cache, prompts, seen, counts):
                     break
                 triple = (t.ep["statement"], tuple(s), f, tstar)
                 if triple in seen:
-                    counts[f"{label}: the same triple in another condition"] += 1
+                    where = ("in another condition" if seen[triple] != label
+                             else "earlier in this condition")
+                    counts[f"{label}: the same triple {where}"] += 1
                     continue
                 if pi["seq"] > pj["seq"]:
                     branch, base, slot, swap_in = "i > j", pj, \
@@ -335,7 +352,7 @@ def pairs(label, trees, chosen_trees, cache, prompts, seen, counts):
                     counts[f"{label}: dropped: replacement not expressible"] += 1
                     continue
                 chosen, rejected = (content, other) if branch == "i > j" else (other, content)
-                seen.add(triple)
+                seen[triple] = label
                 made += 1
                 counts[f"{label}: pairs ({branch})"] += 1
                 out.append({"condition": label, "statement": t.ep["statement"], "path": s,
@@ -361,17 +378,19 @@ def main(argv=None):
             if ln.strip():
                 e = json.loads(ln)
                 cache[e["key"]] = e
-    prompts, seen, counts, out, summary = Prompts(root=not a.no_root), set(), Counter(), [], {}
+    prompts, seen, counts, out, summary = Prompts(root=not a.no_root), {}, Counter(), [], {}
     proved_c = None
     for label, d in runs:
-        trees = load(d)
+        aside = Counter()
+        trees = load(d, aside)
         for t in trees:
             ps = (t.ep.get("policy") or {}).get("prompt_sha256")
             if ps != prompt_sha256():
                 raise SystemExit(f"{d}: an episode ran under prompt {ps}, not this code's "
                                  f"{prompt_sha256()}: its prompts can't be rebuilt here")
         chosen, fc = frontier(trees, proved_c if label != runs[0][0] else None)
-        summary[label] = {"trees": len(trees), **dict(fc)}
+        summary[label] = {"trees": len(trees), **{f"set aside: {k}": v for k, v in aside.items()},
+                          **dict(fc)}
         out += pairs(label, trees, chosen, cache, prompts, seen, counts)
         if proved_c is None:
             proved_c = {t.ep["statement"] for t in trees if t.proved}
