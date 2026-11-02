@@ -12,8 +12,8 @@ version of the proposer.
 
 The proposals go to DIR/proposals.jsonl, each with its batch, kind, seed and request
 cache key. They are scored elsewhere, on CPU, by tools/pattern_run.py --run 4 (batch
-A) and --run 5 (batch B). Responses are cached by request hash, so a rerun makes no
-calls it has already made.
+A), --run 5 (batch B) and --run 6 (batch C). Responses are cached by request hash, so
+a rerun makes no calls it has already made.
 """
 import argparse
 import hashlib
@@ -29,11 +29,12 @@ sys.path.insert(0, HERE)
 from proventhru.record import canon  # noqa: E402
 
 PROPOSER = "pattern/model-m1-v1"
-SPEC, CODE_ROW = "docs/pattern-run-4.md", "code:pattern-m1"
+SPEC, CODE_ROW = "docs/pattern-run-6.md", "code:pattern-m1"
 MODEL = "Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28"   # M1, PROTOCOL.md v5
 K = 8                           # conjectures per call
 TEMPERATURE, TOP_P, MAX_TOKENS = 0.8, 0.95, 2000
-BATCHES = {"A": (0, 1, 2, 3), "B": (4, 5, 6, 7)}      # seeds: run 4 is batch A, run 5 batch B
+# seeds: run 4 is batch A, run 5 batch B, run 6 batch C (docs/pattern-run-6.md)
+BATCHES = {"A": (0, 1, 2, 3), "B": (4, 5, 6, 7), "C": (8, 9, 10, 11)}
 # The metrics doc's pattern kinds, in its words, each with one line on what it asks.
 KINDS = {
     "symmetry": "the statement is unchanged when two of its arguments are exchanged",
@@ -125,12 +126,14 @@ def preflight(model, repo=HERE):
     return digest
 
 
-def propose(base_url, model, out, cache_path, transport=None, log=print):
+def propose(base_url, model, out, cache_path, transport=None, log=print, batches=None):
     from proventhru.policy_openai import HTTPTransport, ResponseCache, extract_json
     url = base_url.rstrip("/") + "/chat/completions"
     cache, transport = ResponseCache(cache_path), transport or HTTPTransport()
     rows = []
     for batch, seeds in BATCHES.items():
+        if batches and batch not in batches:
+            continue
         for kind in KINDS:
             for seed in seeds:
                 b = body(model, kind, seed)
@@ -173,9 +176,11 @@ def main(argv=None):
     ap.add_argument("--model", required=True, help="the served model name, pinned to MODEL")
     ap.add_argument("--out", required=True)
     ap.add_argument("--cache", required=True)
+    ap.add_argument("--batch", action="append", choices=sorted(BATCHES),
+                    help="only these batches (default: all); run 6 is --batch C")
     a = ap.parse_args(argv)
     spec = preflight(a.model)
-    rows = propose(a.base_url, a.model, a.out, a.cache)
+    rows = propose(a.base_url, a.model, a.out, a.cache, batches=a.batch)
     print(json.dumps({"done": True, "rows": len(rows), "spec_sha256": spec,
                       "prompt_sha256": prompt_sha256(),
                       "failures": sum("failure" in r for r in rows)}))

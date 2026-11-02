@@ -184,6 +184,19 @@ class TestInCoq(unittest.TestCase):
         self.assertEqual(ctor, "intros; constructor; assumption.")    # sorted_cons, premises swapped
         self.assertIsNone(helper)                                      # needs an induction
 
+    def test_run_6_reads_run_5_under_its_recount(self):
+        import sys
+        sys.path.insert(0, "tools")
+        import pattern_run as R
+        R.configure(6)
+        try:
+            out = "\n".join(R.stopping({"present_in_development": 0, "gold_proved": [],
+                                         "significant": 0}, []))
+        finally:
+            R.configure(1)
+        self.assertIn("as docs/pattern-run-6.md reads it", out)
+        self.assertIn("run 5 0 (of its 1 by its own rules)", out)   # docs/pattern-recount-4-5.md
+
     def test_sorted_le_stands_for_sorted(self):
         coq = P.Coq(notations=False, extra=("Require Import Sorted.",))
         try:
