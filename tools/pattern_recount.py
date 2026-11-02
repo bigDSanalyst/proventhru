@@ -19,6 +19,7 @@ recorded directory.
 """
 import argparse
 import hashlib
+import json
 import os
 import re
 import sys
@@ -33,6 +34,7 @@ from proventhru import explore, pattern  # noqa: E402
 SPEC, CODE_ROW = "docs/pattern-recount-4-5.md", "code:pattern-recount"
 RUNS = (4, 5)
 REPORT = os.path.join(HERE, "results", "pattern-recount-4-5.md")
+ROWS = os.path.join(HERE, "results", "pattern-recount-4-5.jsonl")   # what later runs read
 GOVERNED = ["pilots/isort/ISort.v", "proventhru/devgen.py", "proventhru/explore.py",
             "proventhru/pattern.py", "tools/pattern_recount.py", "tools/pattern_run.py"]
 TRUE = ("id", "True")
@@ -188,6 +190,8 @@ def main(argv=None):
         rows[n], results[n] = recount(dirs[n], base_pre)
     with open(a.report, "w") as fh:
         fh.write(report(results, rows, spec, code))
+    with open(ROWS, "w") as fh:
+        fh.writelines(json.dumps(dict(r, run=n)) + "\n" for n in RUNS for r in results[n])
     print({n: sum(r["significant"] for r in results[n]) for n in RUNS}, a.report)
 
 
