@@ -192,7 +192,8 @@ CODE_ROWS = {"code:target-1": _target1_code, "code:pattern-run-1": _pattern_run1
              "code:pattern-run-2": _pattern_run1_code, "code:pattern-run-3": _pattern_run1_code,
              "code:pattern-run-4": _pattern_run1_code, "code:pattern-m1": _pattern_m1_code,
              "code:target-2-pairs": _target2_pairs_code,
-             "code:pattern-recount": _pattern_recount_code}
+             "code:pattern-recount": _pattern_recount_code,
+             "code:pattern-run-6": _pattern_run1_code}
 
 
 def check_frozen(repo):

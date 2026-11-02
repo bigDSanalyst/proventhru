@@ -58,10 +58,18 @@ RUNS = {
         "proposer": "pattern/model-m1-v1", "model_batch": "B", "sources": (), "relation": None,
         "equations": False, "extra": ("Require Import Sorted.",), "strict_connects": True,
         "closed_novelty": True, "previous": 4, "compare": 3},
+    # Run 6 (docs/pattern-run-6.md): M1's third batch, scored as run 5 is but under the
+    # necessary-premise (d) (docs/pattern-recount-4-5.md); the rule reads it against run 5.
+    6: {"spec": "docs/pattern-run-6.md", "row": "code:pattern-run-6",
+        "proposer": "pattern/model-m1-v1", "model_batch": "C", "sources": (), "relation": None,
+        "equations": False, "extra": ("Require Import Sorted.",), "strict_connects": True,
+        "closed_novelty": True, "previous": 5, "compare": 3, "necessary_premises": True},
 }
 # Run 3's novelty: a statement one constructor step closes is present in the
 # development (its own inductives' constructors) or the library (theirs).
 CONSTRUCTOR_CLOSERS = ("intros; constructor.", "intros; constructor; assumption.")
+# Runs 4 and 5 recounted under the necessary-premise (d), for a later run's stopping rule.
+RECOUNT = os.path.join(HERE, "results", "pattern-recount-4-5.jsonl")
 RUN = 1
 CFG = RUNS[RUN]
 SPEC, CODE_ROW = CFG["spec"], CFG["row"]
@@ -90,7 +98,8 @@ GOVERNED = [
     "proventhru/explore.py",
     "proventhru/gate.py", "proventhru/goals.py", "proventhru/kernel.py", "proventhru/pattern.py",
     "proventhru/pipeline.py", "proventhru/record.py", "proventhru/retrieval.py",
-    "proventhru/search.py", "proventhru/session.py", "tools/pattern_run.py",
+    "proventhru/search.py", "proventhru/session.py", "tools/pattern_recount.py",
+    "tools/pattern_run.py",
 ]
 JOBS = 3
 STEPS = 600
@@ -505,6 +514,13 @@ def score(out, rows, jobs, rounds=ROUNDS, steps=STEPS, log=print):
                     r["weakening_of"].append(f"gold:{n}")
             if r["weakening_of"]:
                 r["connects"] = []
+        if CFG.get("necessary_premises") and r["connects"]:
+            # docs/pattern-recount-4-5.md: a symbol only in premises that the
+            # conjecture's own proof doesn't need connects nothing
+            from pattern_recount import necessity
+            nec = necessity(r, corpus, base_pre)
+            r["unneeded"] = sorted(x for x, v in nec["symbols"].items() if not v["needed"])
+            r["connects"] = nec["kept"]
         r["significant"] = {"implies": bool(r["implies"]), "simplifies": bool(r["simplifies"]),
                             "used": bool(r["used_by"]), "connects": bool(r["connects"])}
 
@@ -580,7 +596,7 @@ def candidates_file(rows, dest):
     keep = ("statement", "prefix", "sources", "kinds", "test", "formalizable", "gate", "derived",
             "novel", "refuted", "proved", "gold", "implies", "equivalent", "simplifies",
             "used_by", "inner", "connects", "significant", "present_by", "weakening_of",
-            "why", "in_compared_run")
+            "unneeded", "why", "in_compared_run")
     dump([{k: r[k] for k in keep if k in r} for r in rows], dest)
 
 
@@ -613,8 +629,18 @@ def stopping(s, rows):
                and any((r.get("significant") or {}).values())]
     kept = [r for r in old_sig if not r.get("gold")
             and not follows(base_pre, r["statement"], CONSTRUCTOR_CLOSERS)]
+    if CFG.get("necessary_premises") and prev in (4, 5):
+        # the previous run was scored under the frozen (d): its recount says what it
+        # counts under this run's
+        recounted = [r for r in load(RECOUNT) if r["run"] == prev]
+        if len(recounted) != len(old_sig):
+            raise SystemExit(f"run {prev}'s recount has {len(recounted)} rows, not its "
+                             f"{len(old_sig)} significant conjectures")
+        dropped = {r["statement"] for r in recounted if not r["significant"]}
+        kept = [r for r in kept if r["statement"] not in dropped]
     new_buckets = sorted(buckets(rows) - buckets(old), key=str)
-    out = ["## The stopping rule, as docs/pattern-run-3.md reads it", "",
+    out = [f"## The stopping rule, as {'docs/pattern-run-3.md' if RUN < 6 else SPEC} reads it",
+           "",
            f"- Statements present in the development (a held-out lemma, or one constructor "
            f"step), so not novel here: {s['present_in_development']}. Held-out lemmas proved: "
            f"{', '.join(s['gold_proved']) or 'none'}.",
@@ -708,6 +734,9 @@ def report(out, summary, rows, reg, harvest, dest):
             L.append(f"  - connects: {', '.join('–'.join(p) for p in r['connects'])}")
         if r.get("weakening_of"):
             L.append(f"  - a weakening of {', '.join(r['weakening_of'])}: (d) doesn't count it")
+        if r.get("unneeded"):
+            L.append(f"  - only in premises its proof doesn't need: {', '.join(r['unneeded'])}; "
+                     "the necessary-premise (d) drops their pairs")
     L += ["", "## Gold, searched without and with each conjecture", "",
           f"Baseline (the prover on the development's definitions alone): "
           f"{sum(s['baseline_gold'].values())} of {len(s['baseline_gold'])} proved.", "",

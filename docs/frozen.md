@@ -42,3 +42,7 @@ A `code:` row is a hash over the files its owner lists, not a file: `code:target
 | `code:pattern-run-4` | closed | `ee082dae5b1a01d6498a08b256efc2fdfc791cc3a71e3f9941ab404d2f325518` | `92fae1c` | 2026-11-01 |
 | `docs/pattern-recount-4-5.md` | v1 | `5dd953a4e6fc7f654a3f2f761cd880ff88d79f046d7593028aca0d8d94388950` | `f09a887` | 2026-11-02 |
 | `code:pattern-recount` | v1 | `d0eefc3c266c707bb0191d89304e8491818140dd5d84fba25eb7a0ba0e9e97a5` | `ea970a8` | 2026-11-02 |
+| `code:pattern-recount` | closed | `d0eefc3c266c707bb0191d89304e8491818140dd5d84fba25eb7a0ba0e9e97a5` | `ea970a8` | 2026-11-02 |
+| `docs/pattern-run-6.md` | v1 | `4513cbcdff3a8d28efc189ec881423ef451f67e3bf3e72786fef10ed46e34b37` | `60416d9` | 2026-11-02 |
+| `code:pattern-m1` | v2 | `0bb32d39f1a6b0e5eeb6e17a02b07866ae885a8290fc3665af4280e526112a9f` | `60416d9` | 2026-11-02 |
+| `code:pattern-run-6` | v1 | `85ea66470c545a7aeb55bed17bef81c0f54981a4b8970729eacd9b5c84f0eba9` | `60416d9` | 2026-11-02 |

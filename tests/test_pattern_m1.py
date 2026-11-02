@@ -46,7 +46,8 @@ class TestPrompt(unittest.TestCase):
     def test_identity_is_stable_and_seeds_differ(self):
         self.assertEqual(M.prompt_sha256(), M.prompt_sha256())
         self.assertNotEqual(M.body(M.MODEL, "duality", 0), M.body(M.MODEL, "duality", 1))
-        self.assertEqual(set(M.BATCHES["A"]) & set(M.BATCHES["B"]), set())
+        seeds = [x for b in M.BATCHES.values() for x in b]
+        self.assertEqual(len(seeds), len(set(seeds)))  # the batches share no seed
 
     def test_the_model_is_pinned(self):
         with self.assertRaises(SystemExit):
@@ -61,11 +62,23 @@ class TestPrompt(unittest.TestCase):
             calls = len(M.KINDS) * sum(len(s) for s in M.BATCHES.values())
             self.assertEqual(stand.calls, calls)
             self.assertEqual(len(rows), calls * M.K)
-            self.assertEqual({r["batch"] for r in rows}, {"A", "B"})
+            self.assertEqual({r["batch"] for r in rows}, {"A", "B", "C"})
             again = M.propose("http://localhost:8000/v1", M.MODEL, d, os.path.join(d, "c.jsonl"),
                               transport=stand, log=lambda *_: None)
             self.assertEqual(stand.calls, calls)        # every request came from the cache
             self.assertEqual(again, rows)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+    def test_one_batch_makes_only_its_calls(self):
+        d = tempfile.mkdtemp()
+        try:
+            stand = Stand()
+            rows = M.propose("http://localhost:8000/v1", M.MODEL, d, os.path.join(d, "c.jsonl"),
+                             transport=stand, log=lambda *_: None, batches=["C"])
+            self.assertEqual(stand.calls, len(M.KINDS) * len(M.BATCHES["C"]))
+            self.assertEqual({r["seed"] for r in rows}, set(M.BATCHES["C"]))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
